@@ -2,6 +2,7 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
+ip -6 r a prohibit 2001::/3
 # Read allowed domains from file
 ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
 if [ -f "$ALLOWED_DOMAINS_FILE" ]; then
