@@ -54,6 +54,10 @@ for domain in "${ALLOWED_DOMAINS[@]}"; do
     fi
 
     while read -r ip; do
+        if [[ $ip =~ [a-z]\. ]]; then
+            echo "INFO: skipping non-ip result for $domain"
+            continue
+        fi
         if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
             echo "ERROR: Invalid IP from DNS for $domain: $ip"
             exit 1
