@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ripgrep \
   zsh \
   python3 \
+  yamllint \
+  shellcheck \
   && rm -rf /var/lib/apt/lists/*
 
 # Ensure default node user has access to /usr/local/share
