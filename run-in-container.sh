@@ -74,6 +74,7 @@ docker run --name "$CONTAINER_NAME" -d \
 docker exec --user root "$CONTAINER_NAME" bash -c "mkdir -p /etc/codex"
 for domain in $OPENAI_ALLOWED_DOMAINS; do
   # Validate domain format to prevent injection
+  echo "whitelisting domain: $domain"
   if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
     echo "Error: Invalid domain format: $domain"
     exit 1
