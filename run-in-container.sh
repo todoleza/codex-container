@@ -11,7 +11,7 @@ set -e
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 # Default allowed domains - can be overridden with OPENAI_ALLOWED_DOMAINS env var
-OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org}"
+OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org auth.openai.com}"
 
 # Parse optional flag.
 if [ "$1" = "--work_dir" ]; then
