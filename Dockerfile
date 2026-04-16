@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   python3 \
   yamllint \
   shellcheck \
+  bubblewrap \
   && rm -rf /var/lib/apt/lists/*
 
 # Ensure default node user has access to /usr/local/share
