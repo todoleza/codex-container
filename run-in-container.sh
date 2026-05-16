@@ -10,7 +10,7 @@ set -euo pipefail
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org auth.openai.com}"
+OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com chatgpt.com}"
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
@@ -25,6 +25,21 @@ fi
 read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
 read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
 read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
+
+slugify() {
+  local value="$1"
+  value=$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')
+  value=$(printf '%s' "${value}" | sed 's/[^a-z0-9._-]/-/g; s/--*/-/g; s/^-//; s/-$//')
+  if [ -z "${value}" ]; then
+    value="workspace"
+  fi
+  printf '%s' "${value}"
+}
+
+stable_hash() {
+  local value="$1"
+  printf '%s' "${value}" | sha256sum | cut -c1-8
+}
 
 if [ "$#" -eq 0 ]; then
   echo "Usage: $0 [--work_dir directory] \"COMMAND\""
@@ -42,13 +57,17 @@ fi
 
 WORK_DIR=$(realpath "$WORK_DIR")
 
-CONTAINER_NAME="codex_$(echo "$WORK_DIR" | sed 's/\//_/g' | sed 's/[^a-zA-Z0-9_-]//g')"
-POD_NAME="${CONTAINER_NAME}_pod"
-FW_NAME="${CONTAINER_NAME}_fw"
+WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
+WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
+POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
+INFRA_NAME="${POD_NAME}-infra"
+FW_NAME="${POD_NAME}-fw"
+CONTAINER_NAME="${POD_NAME}-app"
 
 cleanup() {
   "${PODMAN_BIN}" rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   "${PODMAN_BIN}" rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
+  "${PODMAN_BIN}" rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
   "${PODMAN_BIN}" pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -112,6 +131,7 @@ cleanup
 
 "${PODMAN_BIN}" pod create \
   --name "$POD_NAME" \
+  --infra-name "$INFRA_NAME" \
   --network pasta \
   --userns keep-id
 

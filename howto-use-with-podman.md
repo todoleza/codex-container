@@ -20,6 +20,13 @@ Run Codex through the pod launcher:
 ./run-in-container.sh --work_dir /path/to/repo --full-auto
 ```
 
+The direct launcher creates a pod with stable human-readable names:
+
+- pod: `codex-<workspace>-<hash>`
+- infra: `codex-<workspace>-<hash>-infra`
+- firewall: `codex-<workspace>-<hash>-fw`
+- app: `codex-<workspace>-<hash>-app`
+
 The launcher:
 
 - creates a rootless Podman pod
