@@ -8,7 +8,6 @@ OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
-: "${PODMAN_BIN:=podman}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
@@ -69,7 +68,7 @@ RUNTIME_IMAGE=$(qualify_image_ref "${CONTAINER_IMAGE}")
 FIREWALL_IMAGE=$(qualify_image_ref "${FIREWALL_CONTAINER_IMAGE}")
 
 cleanup() {
-  "${PODMAN_BIN}" kube down "${MANIFEST_PATH}" >/dev/null 2>&1 || true
+  podman kube down "${MANIFEST_PATH}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR_CREATED}"
 }
 trap cleanup EXIT
@@ -99,8 +98,8 @@ if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
   exit 1
 fi
 
-if ! command -v "${PODMAN_BIN}" >/dev/null 2>&1; then
-  echo "Error: ${PODMAN_BIN} is not installed." >&2
+if ! command -v podman >/dev/null 2>&1; then
+  echo "Error: podman is not installed." >&2
   exit 1
 fi
 
@@ -171,35 +170,35 @@ spec:
           mountPath: /app${WORK_DIR}
 EOF
 
-"${PODMAN_BIN}" kube play --replace --network pasta "${MANIFEST_PATH}" >/dev/null
+podman kube play --replace --network pasta "${MANIFEST_PATH}" >/dev/null
 
-FW_NAME=$("${PODMAN_BIN}" ps --filter "pod=${POD_NAME}" --format '{{.Names}}' | grep -- '-firewall$' | head -n1)
-APP_NAME=$("${PODMAN_BIN}" ps --filter "pod=${POD_NAME}" --format '{{.Names}}' | grep -- '-codex$' | head -n1)
+FW_NAME=$(podman ps --filter "pod=${POD_NAME}" --format '{{.Names}}' | grep -- '-firewall$' | head -n1)
+APP_NAME=$(podman ps --filter "pod=${POD_NAME}" --format '{{.Names}}' | grep -- '-codex$' | head -n1)
 
 if [ -z "${FW_NAME}" ] || [ -z "${APP_NAME}" ]; then
   echo "Error: Failed to discover kube-play container names for pod ${POD_NAME}." >&2
   exit 1
 fi
 
-"${PODMAN_BIN}" exec "${FW_NAME}" firewall-init
+podman exec "${FW_NAME}" firewall-init
 
 for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
-  "${PODMAN_BIN}" exec "${FW_NAME}" firewall-allow-domain "${domain}"
+  podman exec "${FW_NAME}" firewall-allow-domain "${domain}"
 done
 
 for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
-  "${PODMAN_BIN}" exec "${FW_NAME}" firewall-allow-address "${address}"
+  podman exec "${FW_NAME}" firewall-allow-address "${address}"
 done
 
 for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
-  "${PODMAN_BIN}" exec "${FW_NAME}" firewall-allow-address "${address}"
+  podman exec "${FW_NAME}" firewall-allow-address "${address}"
 done
 
-"${PODMAN_BIN}" exec "${FW_NAME}" firewall-reload
+podman exec "${FW_NAME}" firewall-reload
 
 quoted_args=""
 for arg in "$@"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
 
-"${PODMAN_BIN}" exec -it "${APP_NAME}" bash -c "cd \"/app${WORK_DIR}\" && codex ${quoted_args}"
+podman exec -it "${APP_NAME}" bash -c "cd \"/app${WORK_DIR}\" && codex ${quoted_args}"

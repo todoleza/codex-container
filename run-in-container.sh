@@ -16,7 +16,6 @@ OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
-: "${PODMAN_BIN:=podman}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
@@ -65,10 +64,10 @@ FW_NAME="${POD_NAME}-fw"
 CONTAINER_NAME="${POD_NAME}-app"
 
 cleanup() {
-  "${PODMAN_BIN}" rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  "${PODMAN_BIN}" rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
-  "${PODMAN_BIN}" rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
-  "${PODMAN_BIN}" pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
+  podman pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -87,10 +86,6 @@ validate_ipv6() {
   [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
 }
 
-podman_exec() {
-  "${PODMAN_BIN}" exec "$@"
-}
-
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
   exit 1
@@ -101,8 +96,8 @@ if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
   exit 1
 fi
 
-if ! command -v "${PODMAN_BIN}" >/dev/null 2>&1; then
-  echo "Error: ${PODMAN_BIN} is not installed." >&2
+if ! command -v podman >/dev/null 2>&1; then
+  echo "Error: podman is not installed." >&2
   exit 1
 fi
 
@@ -129,13 +124,13 @@ done
 
 cleanup
 
-"${PODMAN_BIN}" pod create \
+podman pod create \
   --name "$POD_NAME" \
   --infra-name "$INFRA_NAME" \
   --network pasta \
   --userns keep-id
 
-"${PODMAN_BIN}" run --name "$FW_NAME" -d \
+podman run --name "$FW_NAME" -d \
   --pod "$POD_NAME" \
   --user root \
   --cap-add=NET_ADMIN \
@@ -143,23 +138,23 @@ cleanup
   "${FIREWALL_CONTAINER_IMAGE}" \
   sleep infinity
 
-podman_exec "$FW_NAME" firewall-init
+podman exec "$FW_NAME" firewall-init
 
 for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
-  podman_exec "$FW_NAME" firewall-allow-domain "$domain"
+  podman exec "$FW_NAME" firewall-allow-domain "$domain"
 done
 
 for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
-  podman_exec "$FW_NAME" firewall-allow-address "$address"
+  podman exec "$FW_NAME" firewall-allow-address "$address"
 done
 
 for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
-  podman_exec "$FW_NAME" firewall-allow-address "$address"
+  podman exec "$FW_NAME" firewall-allow-address "$address"
 done
 
-podman_exec "$FW_NAME" firewall-reload
+podman exec "$FW_NAME" firewall-reload
 
-"${PODMAN_BIN}" run --name "$CONTAINER_NAME" -d \
+podman run --name "$CONTAINER_NAME" -d \
   --pod "$POD_NAME" \
   -e OPENAI_API_KEY \
   --cap-drop=ALL \
@@ -175,4 +170,4 @@ for arg in "$@"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
 
-"${PODMAN_BIN}" exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex ${quoted_args}"
+podman exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex ${quoted_args}"
