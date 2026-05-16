@@ -2,12 +2,11 @@
 
 set -euo pipefail
 
-: "${TZ:-Europe/Prague}"
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 CONTAINER_CLI="${CONTAINER_CLI:-podman}"
 trap "popd >> /dev/null" EXIT
-pushd "$SCRIPT_DIR/.." >> /dev/null || {
-  echo "Error: Failed to change directory to $SCRIPT_DIR/.."
+pushd "$SCRIPT_DIR" >> /dev/null || {
+  echo "Error: Failed to change directory to $SCRIPT_DIR"
   exit 1
 }
 

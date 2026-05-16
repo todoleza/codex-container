@@ -9,12 +9,13 @@ RUN apk add --no-cache \
 
 RUN mkdir -p /etc/codex-firewall
 
-COPY scripts/firewall-common.sh /usr/local/lib/codex-firewall/
-COPY scripts/firewall-init.sh /usr/local/bin/firewall-init
-COPY scripts/firewall-allow-domain.sh /usr/local/bin/firewall-allow-domain
-COPY scripts/firewall-allow-address.sh /usr/local/bin/firewall-allow-address
-COPY scripts/firewall-reload.sh /usr/local/bin/firewall-reload
-COPY scripts/firewall-list.sh /usr/local/bin/firewall-list
+COPY firewall/firewall-common /usr/local/lib/codex-firewall/firewall-common.sh
+COPY firewall/firewall-init \
+     firewall/firewall-allow-domain \
+     firewall/firewall-allow-address \
+     firewall/firewall-reload \
+     firewall/firewall-list \
+     /usr/local/bin/
 
 RUN chmod 500 /usr/local/bin/firewall-init \
     /usr/local/bin/firewall-allow-domain \

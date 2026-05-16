@@ -4,7 +4,7 @@ Build both images from `codex-cli/`:
 
 ```bash
 ./gen-dist.sh
-CONTAINER_CLI=podman ./scripts/build_container.sh
+CONTAINER_CLI=podman ./build-images.sh
 ```
 
 `gen-dist.sh` is the step that stages `dist/codex.tgz`. `build_container.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
