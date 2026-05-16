@@ -59,4 +59,4 @@ Only after those steps succeed does it start the Codex container.
 Two user-facing entrypoints are prepared:
 
 - `run-in-container.sh` for direct `podman pod create` orchestration with explicit pod, infra, firewall, and app names
-- `run-in-podman-kube.sh` for a `podman kube play` workflow using Podman annotations for `keep-id` and infra naming
+- `run-in-podman-kube.sh` for a draft `podman kube play` workflow using Podman annotations for `keep-id` and infra naming

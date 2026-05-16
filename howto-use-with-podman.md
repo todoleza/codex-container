@@ -14,7 +14,7 @@ This produces:
 - `codex`: the Fedora-based Codex runtime image
 - `codex-firewall`: the lean Alpine firewall sidecar
 
-Run Codex through the pod launcher:
+Run Codex through the primary pod launcher:
 
 ```bash
 ./run-in-container.sh --work_dir /path/to/repo --full-auto
@@ -34,13 +34,15 @@ The launcher:
 - programs IPv4 and IPv6 egress rules with `nftables`
 - starts an unprivileged Codex container in the same pod network namespace
 
-You can also run the same setup through `podman kube play`:
+There is also a `podman kube play` path:
 
 ```bash
 ./run-in-podman-kube.sh --work_dir /path/to/repo --full-auto
 ```
 
 That path renders a temporary kube manifest, sets `io.podman.annotations.userns=keep-id`, sets `io.podman.annotations.infra.name=<pod>-infra`, and then configures the firewall sidecar with `podman exec`.
+
+Treat the kube-play path as a draft, not as a supported or confirmed-working deployment shape. It exists to capture the current experiment, not as the recommended way to run this prototype.
 
 Optional environment variables:
 

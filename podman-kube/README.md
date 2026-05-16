@@ -1,5 +1,7 @@
 ## `podman kube play` workflow
 
+This path is draft-only. It is not yet a confirmed workable solution and should not be treated as the primary deployment method for this prototype.
+
 `run-in-podman-kube.sh` renders a temporary Podman-compatible kube manifest and starts the same two-container pod shape as `run-in-container.sh`:
 
 - a rootless pod with `keep-id`
@@ -16,7 +18,7 @@ Expected object names:
 - firewall container: `<pod>-firewall`
 - app container: `<pod>-codex`
 
-Run it like this:
+If you still want to experiment with it, run it like this:
 
 ```bash
 ./run-in-podman-kube.sh --work_dir /path/to/repo --full-auto
