@@ -1,20 +1,37 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Usage:
-#   ./run_in_container.sh [--work_dir directory] "COMMAND"
+#   ./run-in-container.sh [--work_dir directory] "COMMAND"
 #
 #   Examples:
-#     ./run_in_container.sh --work_dir project/code "ls -la"
-#     ./run_in_container.sh "echo Hello, world!"
+#     ./run-in-container.sh --work_dir project/code "ls -la"
+#     ./run-in-container.sh "echo Hello, world!"
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-# Default allowed domains - can be overridden with OPENAI_ALLOWED_DOMAINS env var
 OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org auth.openai.com}"
+: "${EXTRA_ALLOWED_DOMAINS:-}"
+: "${EXTRA_ALLOWED_IPV4:-}"
+: "${EXTRA_ALLOWED_IPV6:-}"
+: "${CONTAINER_IMAGE:=codex}"
+: "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
+: "${PODMAN_BIN:=podman}"
 
-# Parse optional flag.
-if [ "$1" = "--work_dir" ]; then
+if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
+    OPENAI_ALLOWED_DOMAINS+=" $EXTRA_ALLOWED_DOMAINS"
+fi
+
+read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
+read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
+read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
+  exit 1
+fi
+
+if [ "${1:-}" = "--work_dir" ]; then
   if [ -z "$2" ]; then
     echo "Error: --work_dir flag provided but no directory specified."
     exit 1
@@ -25,77 +42,117 @@ fi
 
 WORK_DIR=$(realpath "$WORK_DIR")
 
-# Generate a unique container name based on the normalized work directory
 CONTAINER_NAME="codex_$(echo "$WORK_DIR" | sed 's/\//_/g' | sed 's/[^a-zA-Z0-9_-]//g')"
+POD_NAME="${CONTAINER_NAME}_pod"
+FW_NAME="${CONTAINER_NAME}_fw"
 
-# Define cleanup to remove the container on script exit, ensuring no leftover containers
 cleanup() {
-  docker rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  "${PODMAN_BIN}" rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  "${PODMAN_BIN}" rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
+  "${PODMAN_BIN}" pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
 }
-# Trap EXIT to invoke cleanup regardless of how the script terminates
 trap cleanup EXIT
 
-# Ensure a command is provided.
-if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
-  exit 1
-fi
+validate_domain() {
+  local domain="$1"
+  [[ "${domain}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]\.[A-Za-z]{2,}$ ]]
+}
 
-# Check if WORK_DIR is set.
+validate_ipv4() {
+  local address="$1"
+  [[ "${address}" =~ ^[0-9./]+$ ]]
+}
+
+validate_ipv6() {
+  local address="$1"
+  [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
+}
+
+podman_exec() {
+  "${PODMAN_BIN}" exec "$@"
+}
+
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
   exit 1
 fi
 
-# Verify that OPENAI_ALLOWED_DOMAINS is not empty
 if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
   echo "Error: OPENAI_ALLOWED_DOMAINS is empty."
   exit 1
 fi
 
-# Kill any existing container for the working directory using cleanup(), centralizing removal logic.
-cleanup
+if ! command -v "${PODMAN_BIN}" >/dev/null 2>&1; then
+  echo "Error: ${PODMAN_BIN} is not installed." >&2
+  exit 1
+fi
 
-# Run the container with the specified directory mounted at the same path inside the container.
-  #--network pasta:--ipv4-only \
-docker run --name "$CONTAINER_NAME" -d \
-  -e OPENAI_API_KEY \
-  --cap-add=NET_ADMIN \
-  --cap-add=NET_RAW \
-  --user "$(id -u):$(id -g)" \
-  --userns=keep-id \
-  --network=bridge:ipv6=false \
-  -v ~/.codex:/home/node/.codex:z \
-  -v "$WORK_DIR:/app$WORK_DIR" \
-  codex \
-  sleep infinity
-
-# Write the allowed domains to a file in the container
-docker exec --user root "$CONTAINER_NAME" bash -c "mkdir -p /etc/codex"
-for domain in $OPENAI_ALLOWED_DOMAINS; do
-  # Validate domain format to prevent injection
-  echo "whitelisting domain: $domain"
-  if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-    echo "Error: Invalid domain format: $domain"
+for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
+  if ! validate_domain "${domain}"; then
+    echo "Error: Invalid domain format: ${domain}" >&2
     exit 1
   fi
-  echo "$domain" | docker exec --user root -i "$CONTAINER_NAME" bash -c "cat >> /etc/codex/allowed_domains.txt"
 done
 
-# Set proper permissions on the domains file
-docker exec --user root "$CONTAINER_NAME" bash -c "chmod 444 /etc/codex/allowed_domains.txt && chown root:root /etc/codex/allowed_domains.txt"
+for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
+  if ! validate_ipv4 "${address}"; then
+    echo "Error: Invalid IPv4/CIDR format: ${address}" >&2
+    exit 1
+  fi
+done
 
-# Initialize the firewall inside the container as root user
-docker exec --user root "$CONTAINER_NAME" bash -c "/usr/local/bin/init_firewall.sh"
+for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
+  if ! validate_ipv6 "${address}"; then
+    echo "Error: Invalid IPv6/CIDR format: ${address}" >&2
+    exit 1
+  fi
+done
 
-# Remove the firewall script after running it
-docker exec --user root "$CONTAINER_NAME" bash -c "rm -f /usr/local/bin/init_firewall.sh"
+cleanup
 
-# Execute the provided command in the container, ensuring it runs in the work directory.
-# We use a parameterized bash command to safely handle the command and directory.
+"${PODMAN_BIN}" pod create \
+  --name "$POD_NAME" \
+  --network pasta
+
+"${PODMAN_BIN}" run --name "$FW_NAME" -d \
+  --pod "$POD_NAME" \
+  --user root \
+  --cap-add=NET_ADMIN \
+  --security-opt=no-new-privileges \
+  "${FIREWALL_CONTAINER_IMAGE}" \
+  sleep infinity
+
+podman_exec "$FW_NAME" firewall-init
+
+for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
+  podman_exec "$FW_NAME" firewall-allow-domain "$domain"
+done
+
+for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
+  podman_exec "$FW_NAME" firewall-allow-address "$address"
+done
+
+for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
+  podman_exec "$FW_NAME" firewall-allow-address "$address"
+done
+
+podman_exec "$FW_NAME" firewall-reload
+
+"${PODMAN_BIN}" run --name "$CONTAINER_NAME" -d \
+  --pod "$POD_NAME" \
+  -e OPENAI_API_KEY \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --user "$(id -u):$(id -g)" \
+  --userns=keep-id \
+  -v "$HOME/.codex:/home/node/.codex:z" \
+  -v "$WORK_DIR:/app$WORK_DIR" \
+  "${CONTAINER_IMAGE}" \
+  sleep infinity
 
 quoted_args=""
 for arg in "$@"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
-docker exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex --full-auto ${quoted_args}"
+
+"${PODMAN_BIN}" exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex ${quoted_args}"
