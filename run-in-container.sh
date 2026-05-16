@@ -10,7 +10,7 @@ set -euo pipefail
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com chatgpt.com}"
+: "${OPENAI_ALLOWED_DOMAINS:=api.openai.com auth.openai.com chatgpt.com}"
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
@@ -64,7 +64,7 @@ FW_NAME="${POD_NAME}-fw"
 CONTAINER_NAME="${POD_NAME}-app"
 
 cleanup() {
-  podman rm --time=0 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  podman rm --time=1.5 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
   podman pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
