@@ -20,6 +20,9 @@ spec:
     - name: firewall
       image: __FIREWALL_IMAGE__
       command: ["sleep", "infinity"]
+      env:
+        - name: TZ
+          value: "__HOST_TZ__"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -31,6 +34,8 @@ spec:
       env:
         - name: OPENAI_API_KEY
           value: "__OPENAI_API_KEY__"
+        - name: TZ
+          value: "__HOST_TZ__"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

@@ -16,6 +16,9 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
+: "${CODEX_SANDBOX_MODE:=danger-full-access}"
+: "${CODEX_APPROVAL_POLICY:=on-request}"
+: "${CODEX_DANGEROUS_BYPASS:=0}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
@@ -40,6 +43,42 @@ stable_hash() {
   printf '%s' "${value}" | sha256sum | cut -c1-8
 }
 
+detect_host_tz() {
+  local tz_candidate=""
+  local localtime_target=""
+
+  if [ -n "${TZ:-}" ]; then
+    printf '%s' "${TZ}"
+    return
+  fi
+
+  if [ -L /etc/localtime ]; then
+    localtime_target=$(readlink /etc/localtime)
+    case "${localtime_target}" in
+      /usr/share/zoneinfo/*)
+        tz_candidate="${localtime_target#/usr/share/zoneinfo/}"
+        ;;
+      ../usr/share/zoneinfo/*)
+        tz_candidate="${localtime_target#../usr/share/zoneinfo/}"
+        ;;
+    esac
+    if [ -n "${tz_candidate}" ]; then
+      printf '%s' "${tz_candidate}"
+      return
+    fi
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz_candidate=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+    if [ -n "${tz_candidate}" ]; then
+      printf '%s' "${tz_candidate}"
+      return
+    fi
+  fi
+
+  printf 'UTC'
+}
+
 if [ "$#" -eq 0 ]; then
   echo "Usage: $0 [--work_dir directory] \"COMMAND\""
   exit 1
@@ -62,6 +101,7 @@ POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
 INFRA_NAME="${POD_NAME}-infra"
 FW_NAME="${POD_NAME}-fw"
 CONTAINER_NAME="${POD_NAME}-app"
+HOST_TZ=$(detect_host_tz)
 
 cleanup() {
   podman rm --time=1.5 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -86,6 +126,22 @@ validate_ipv6() {
   [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
 }
 
+validate_sandbox_mode() {
+  local mode="$1"
+  case "${mode}" in
+    read-only|workspace-write|danger-full-access) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_approval_policy() {
+  local policy="$1"
+  case "${policy}" in
+    untrusted|on-failure|on-request|never) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
   exit 1
@@ -93,6 +149,21 @@ fi
 
 if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
   echo "Error: OPENAI_ALLOWED_DOMAINS is empty."
+  exit 1
+fi
+
+if [[ "${CODEX_DANGEROUS_BYPASS}" != "0" && "${CODEX_DANGEROUS_BYPASS}" != "1" ]]; then
+  echo "Error: CODEX_DANGEROUS_BYPASS must be 0 or 1." >&2
+  exit 1
+fi
+
+if ! validate_sandbox_mode "${CODEX_SANDBOX_MODE}"; then
+  echo "Error: Invalid CODEX_SANDBOX_MODE: ${CODEX_SANDBOX_MODE}" >&2
+  exit 1
+fi
+
+if ! validate_approval_policy "${CODEX_APPROVAL_POLICY}"; then
+  echo "Error: Invalid CODEX_APPROVAL_POLICY: ${CODEX_APPROVAL_POLICY}" >&2
   exit 1
 fi
 
@@ -122,6 +193,26 @@ for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
   fi
 done
 
+echo "== Codex Podman Prototype =="
+echo "pod: ${POD_NAME}"
+echo "workdir: ${WORK_DIR}"
+echo "runtime image: ${CONTAINER_IMAGE}"
+echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
+echo "timezone: ${HOST_TZ}"
+echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
+if [ -n "${EXTRA_ALLOWED_IPV4}" ]; then
+  echo "extra allowed IPv4: ${EXTRA_ALLOWED_IPV4}"
+fi
+if [ -n "${EXTRA_ALLOWED_IPV6}" ]; then
+  echo "extra allowed IPv6: ${EXTRA_ALLOWED_IPV6}"
+fi
+if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
+  echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
+else
+  echo "codex sandbox: ${CODEX_SANDBOX_MODE}"
+  echo "codex approvals: ${CODEX_APPROVAL_POLICY}"
+fi
+
 cleanup
 
 podman pod create \
@@ -133,6 +224,7 @@ podman pod create \
 podman run --name "$FW_NAME" -d \
   --pod "$POD_NAME" \
   --user root \
+  -e TZ="${HOST_TZ}" \
   --cap-add=NET_ADMIN \
   --security-opt=no-new-privileges \
   "${FIREWALL_CONTAINER_IMAGE}" \
@@ -157,6 +249,7 @@ podman exec "$FW_NAME" firewall-reload
 podman run --name "$CONTAINER_NAME" -d \
   --pod "$POD_NAME" \
   -e OPENAI_API_KEY \
+  -e TZ="${HOST_TZ}" \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --user "$(id -u):$(id -g)" \
@@ -170,4 +263,12 @@ for arg in "$@"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
 
-podman exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex ${quoted_args}"
+codex_flags=""
+if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
+  codex_flags+=" --dangerously-bypass-approvals-and-sandbox"
+else
+  codex_flags+=" --sandbox $(printf '%q' "${CODEX_SANDBOX_MODE}")"
+  codex_flags+=" --ask-for-approval $(printf '%q' "${CODEX_APPROVAL_POLICY}")"
+fi
+
+podman exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex${codex_flags}${quoted_args}"

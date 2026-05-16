@@ -33,6 +33,8 @@ The launcher:
 - starts a privileged firewall sidecar in the pod
 - programs IPv4 and IPv6 egress rules with `nftables`
 - starts an unprivileged Codex container in the same pod network namespace
+- propagates the workstation timezone into both containers via `TZ`, falling back to `UTC` if detection fails
+- prints a short startup summary including the current Codex sandbox/approval policy and domain allowlist
 
 There is also a `podman kube play` path:
 
@@ -49,10 +51,24 @@ Optional environment variables:
 ```bash
 CONTAINER_IMAGE=codex
 FIREWALL_CONTAINER_IMAGE=codex-firewall
+CODEX_SANDBOX_MODE=danger-full-access
+CODEX_APPROVAL_POLICY=on-request
+CODEX_DANGEROUS_BYPASS=0
 OPENAI_ALLOWED_DOMAINS="api.openai.com auth.openai.com chatgpt.com"
 EXTRA_ALLOWED_DOMAINS="deb.debian.org"
 EXTRA_ALLOWED_IPV4="1.1.1.1 8.8.8.0/24"
 EXTRA_ALLOWED_IPV6="2606:4700:4700::1111 2001:4860:4860::/48"
+```
+
+The primary launcher defaults to:
+
+- `CODEX_SANDBOX_MODE=danger-full-access`
+- `CODEX_APPROVAL_POLICY=on-request`
+
+That avoids the `bwrap` path while still keeping approvals enabled. If you explicitly want the broad Codex bypass mode, set:
+
+```bash
+CODEX_DANGEROUS_BYPASS=1
 ```
 
 The firewall sidecar is managed with `podman exec`. Useful commands:

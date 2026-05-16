@@ -32,6 +32,42 @@ stable_hash() {
   printf '%s' "${value}" | sha256sum | cut -c1-8
 }
 
+detect_host_tz() {
+  local tz_candidate=""
+  local localtime_target=""
+
+  if [ -n "${TZ:-}" ]; then
+    printf '%s' "${TZ}"
+    return
+  fi
+
+  if [ -L /etc/localtime ]; then
+    localtime_target=$(readlink /etc/localtime)
+    case "${localtime_target}" in
+      /usr/share/zoneinfo/*)
+        tz_candidate="${localtime_target#/usr/share/zoneinfo/}"
+        ;;
+      ../usr/share/zoneinfo/*)
+        tz_candidate="${localtime_target#../usr/share/zoneinfo/}"
+        ;;
+    esac
+    if [ -n "${tz_candidate}" ]; then
+      printf '%s' "${tz_candidate}"
+      return
+    fi
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz_candidate=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+    if [ -n "${tz_candidate}" ]; then
+      printf '%s' "${tz_candidate}"
+      return
+    fi
+  fi
+
+  printf 'UTC'
+}
+
 qualify_image_ref() {
   local image="$1"
   if [[ "${image}" == *"/"* || "${image}" == *":"* ]]; then
@@ -66,6 +102,7 @@ TMPDIR_CREATED="$(mktemp -d)"
 MANIFEST_PATH="${TMPDIR_CREATED}/pod.yaml"
 RUNTIME_IMAGE=$(qualify_image_ref "${CONTAINER_IMAGE}")
 FIREWALL_IMAGE=$(qualify_image_ref "${FIREWALL_CONTAINER_IMAGE}")
+HOST_TZ=$(detect_host_tz)
 
 cleanup() {
   podman kube down "${MANIFEST_PATH}" >/dev/null 2>&1 || true
@@ -147,6 +184,9 @@ spec:
     - name: firewall
       image: ${FIREWALL_IMAGE}
       command: ["sleep", "infinity"]
+      env:
+        - name: TZ
+          value: "${HOST_TZ}"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -158,6 +198,8 @@ spec:
       env:
         - name: OPENAI_API_KEY
           value: "${OPENAI_API_KEY:-}"
+        - name: TZ
+          value: "${HOST_TZ}"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

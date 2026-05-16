@@ -4,7 +4,8 @@ RUN apk add --no-cache \
     bash \
     bind-tools \
     iproute2 \
-    nftables
+    nftables \
+    tzdata
 
 RUN mkdir -p /etc/codex-firewall
 
