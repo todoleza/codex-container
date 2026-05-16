@@ -19,7 +19,7 @@ OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com
 : "${PODMAN_BIN:=podman}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
-    OPENAI_ALLOWED_DOMAINS+=" $EXTRA_ALLOWED_DOMAINS"
+  OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
 fi
 
 read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
@@ -47,7 +47,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 if [ "${1:-}" = "--work_dir" ]; then
-  if [ -z "$2" ]; then
+  if [ -z "${2:-}" ]; then
     echo "Error: --work_dir flag provided but no directory specified."
     exit 1
   fi

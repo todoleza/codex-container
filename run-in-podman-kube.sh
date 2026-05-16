@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org auth.openai.com}"
+OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com chatgpt.com}"
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
@@ -42,20 +42,6 @@ qualify_image_ref() {
   fi
 }
 
-validate_domain() {
-  local domain="$1"
-  [[ "${domain}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]\.[A-Za-z]{2,}$ ]]
-}
-
-validate_ipv4() {
-  local address="$1"
-  [[ "${address}" =~ ^[0-9./]+$ ]]
-}
-
-validate_ipv6() {
-  local address="$1"
-  [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
-}
 
 if [ "$#" -eq 0 ]; then
   echo "Usage: $0 [--work_dir directory] \"COMMAND\""
@@ -72,6 +58,7 @@ if [ "${1:-}" = "--work_dir" ]; then
 fi
 
 WORK_DIR=$(realpath "$WORK_DIR")
+
 WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
 WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
 POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
@@ -86,6 +73,21 @@ cleanup() {
   rm -rf "${TMPDIR_CREATED}"
 }
 trap cleanup EXIT
+
+validate_domain() {
+  local domain="$1"
+  [[ "${domain}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]\.[A-Za-z]{2,}$ ]]
+}
+
+validate_ipv4() {
+  local address="$1"
+  [[ "${address}" =~ ^[0-9./]+$ ]]
+}
+
+validate_ipv6() {
+  local address="$1"
+  [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
+}
 
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
