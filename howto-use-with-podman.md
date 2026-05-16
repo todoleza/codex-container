@@ -7,6 +7,8 @@ Build both images from `codex-cli/`:
 CONTAINER_CLI=podman ./scripts/build_container.sh
 ```
 
+`gen-dist.sh` is the step that stages `dist/codex.tgz`. `build_container.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
+
 This produces:
 
 - `codex`: the Fedora-based Codex runtime image

@@ -11,9 +11,9 @@ set -euo pipefail
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com chatgpt.com deb.debian.org auth.openai.com}"
-: "${EXTRA_ALLOWED_DOMAINS:-}"
-: "${EXTRA_ALLOWED_IPV4:-}"
-: "${EXTRA_ALLOWED_IPV6:-}"
+: "${EXTRA_ALLOWED_DOMAINS:=}"
+: "${EXTRA_ALLOWED_IPV4:=}"
+: "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
 : "${PODMAN_BIN:=podman}"
@@ -112,7 +112,8 @@ cleanup
 
 "${PODMAN_BIN}" pod create \
   --name "$POD_NAME" \
-  --network pasta
+  --network pasta \
+  --userns keep-id
 
 "${PODMAN_BIN}" run --name "$FW_NAME" -d \
   --pod "$POD_NAME" \
@@ -144,7 +145,6 @@ podman_exec "$FW_NAME" firewall-reload
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --user "$(id -u):$(id -g)" \
-  --userns=keep-id \
   -v "$HOME/.codex:/home/node/.codex:z" \
   -v "$WORK_DIR:/app$WORK_DIR" \
   "${CONTAINER_IMAGE}" \
