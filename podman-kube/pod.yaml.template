@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __POD_NAME__
+  annotations:
+    io.podman.annotations.userns: keep-id
+    io.podman.annotations.infra.name: __INFRA_NAME__
+spec:
+  restartPolicy: Never
+  volumes:
+    - name: codex-home
+      hostPath:
+        path: "__CODEX_HOME__"
+        type: DirectoryOrCreate
+    - name: workspace
+      hostPath:
+        path: "__WORK_DIR__"
+        type: Directory
+  containers:
+    - name: firewall
+      image: __FIREWALL_IMAGE__
+      command: ["sleep", "infinity"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+            - NET_ADMIN
+    - name: codex
+      image: __RUNTIME_IMAGE__
+      command: ["sleep", "infinity"]
+      env:
+        - name: OPENAI_API_KEY
+          value: "__OPENAI_API_KEY__"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+      volumeMounts:
+        - name: codex-home
+          mountPath: /home/node/.codex
+        - name: workspace
+          mountPath: "__WORK_MOUNT__"

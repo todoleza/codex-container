@@ -34,6 +34,14 @@ The launcher:
 - programs IPv4 and IPv6 egress rules with `nftables`
 - starts an unprivileged Codex container in the same pod network namespace
 
+You can also run the same setup through `podman kube play`:
+
+```bash
+./run-in-podman-kube.sh --work_dir /path/to/repo --full-auto
+```
+
+That path renders a temporary kube manifest, sets `io.podman.annotations.userns=keep-id`, sets `io.podman.annotations.infra.name=<pod>-infra`, and then configures the firewall sidecar with `podman exec`.
+
 Optional environment variables:
 
 ```bash

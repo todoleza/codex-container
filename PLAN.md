@@ -53,3 +53,10 @@ The wrapper programs the firewall with `podman exec`:
 4. `firewall-reload`
 
 Only after those steps succeed does it start the Codex container.
+
+### Distribution shapes
+
+Two user-facing entrypoints are prepared:
+
+- `run-in-container.sh` for direct `podman pod create` orchestration with explicit pod, infra, firewall, and app names
+- `run-in-podman-kube.sh` for a `podman kube play` workflow using Podman annotations for `keep-id` and infra naming
