@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # Usage:
-#   ./run-in-container.sh [--work_dir directory] "COMMAND"
+#   ./run-in-container.sh [--work_dir directory] ["COMMAND"]
 #
 #   Examples:
 #     ./run-in-container.sh --work_dir project/code "ls -la"
 #     ./run-in-container.sh "echo Hello, world!"
+#     ./run-in-container.sh
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
@@ -19,6 +20,12 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${CODEX_SANDBOX_MODE:=danger-full-access}"
 : "${CODEX_APPROVAL_POLICY:=on-request}"
 : "${CODEX_DANGEROUS_BYPASS:=0}"
+: "${PODMAN_POD_CREATE_ARGS:=}"
+: "${PODMAN_FIREWALL_RUN_ARGS:=}"
+: "${PODMAN_CODEX_RUN_ARGS:=}"
+: "${PODMAN_EXEC_ARGS:=}"
+: "${CONTAINER_EXEC_COMMAND:=}"
+: "${STARTUP_SUMMARY_HOLD_SECONDS:=1.2}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
@@ -27,6 +34,10 @@ fi
 read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
 read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
 read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
+read -r -a PODMAN_POD_CREATE_ARGS_ARRAY <<< "${PODMAN_POD_CREATE_ARGS}"
+read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
+read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
+read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
 
 slugify() {
   local value="$1"
@@ -78,11 +89,6 @@ detect_host_tz() {
 
   printf 'UTC'
 }
-
-if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
-  exit 1
-fi
 
 if [ "${1:-}" = "--work_dir" ]; then
   if [ -z "${2:-}" ]; then
@@ -140,6 +146,19 @@ validate_approval_policy() {
     untrusted|on-failure|on-request|never) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+hold_startup_summary() {
+  if [ "${STARTUP_SUMMARY_HOLD_SECONDS}" = "0" ]; then
+    return
+  fi
+
+  if [ -t 0 ] && [ -t 1 ]; then
+    read -r -t "${STARTUP_SUMMARY_HOLD_SECONDS}" -p "Press Enter to continue, or wait ${STARTUP_SUMMARY_HOLD_SECONDS}s..." _ || true
+    printf '\n'
+  else
+    sleep "${STARTUP_SUMMARY_HOLD_SECONDS}"
+  fi
 }
 
 if [ -z "$WORK_DIR" ]; then
@@ -206,12 +225,30 @@ fi
 if [ -n "${EXTRA_ALLOWED_IPV6}" ]; then
   echo "extra allowed IPv6: ${EXTRA_ALLOWED_IPV6}"
 fi
+if [ -n "${PODMAN_POD_CREATE_ARGS}" ]; then
+  echo "podman pod args: ${PODMAN_POD_CREATE_ARGS}"
+fi
+if [ -n "${PODMAN_FIREWALL_RUN_ARGS}" ]; then
+  echo "podman firewall args: ${PODMAN_FIREWALL_RUN_ARGS}"
+fi
+if [ -n "${PODMAN_CODEX_RUN_ARGS}" ]; then
+  echo "podman codex args: ${PODMAN_CODEX_RUN_ARGS}"
+fi
+if [ -n "${PODMAN_EXEC_ARGS}" ]; then
+  echo "podman exec args: ${PODMAN_EXEC_ARGS}"
+fi
 if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
   echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
 else
   echo "codex sandbox: ${CODEX_SANDBOX_MODE}"
   echo "codex approvals: ${CODEX_APPROVAL_POLICY}"
 fi
+if [ -n "${CONTAINER_EXEC_COMMAND}" ]; then
+  echo "container exec override: ${CONTAINER_EXEC_COMMAND}"
+elif [ "$#" -eq 0 ]; then
+  echo "container exec default: interactive bash"
+fi
+hold_startup_summary
 
 cleanup
 
@@ -219,7 +256,8 @@ podman pod create \
   --name "$POD_NAME" \
   --infra-name "$INFRA_NAME" \
   --network pasta \
-  --userns keep-id
+  --userns keep-id \
+  "${PODMAN_POD_CREATE_ARGS_ARRAY[@]}"
 
 podman run --name "$FW_NAME" -d \
   --pod "$POD_NAME" \
@@ -227,6 +265,7 @@ podman run --name "$FW_NAME" -d \
   -e TZ="${HOST_TZ}" \
   --cap-add=NET_ADMIN \
   --security-opt=no-new-privileges \
+  "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
   "${FIREWALL_CONTAINER_IMAGE}" \
   sleep infinity
 
@@ -255,6 +294,7 @@ podman run --name "$CONTAINER_NAME" -d \
   --user "$(id -u):$(id -g)" \
   -v "$HOME/.codex:/home/node/.codex:z" \
   -v "$WORK_DIR:/app$WORK_DIR" \
+  "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \
   "${CONTAINER_IMAGE}" \
   sleep infinity
 
@@ -271,4 +311,13 @@ else
   codex_flags+=" --ask-for-approval $(printf '%q' "${CODEX_APPROVAL_POLICY}")"
 fi
 
-podman exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex${codex_flags}${quoted_args}"
+container_exec_command="${CONTAINER_EXEC_COMMAND}"
+if [ -z "${container_exec_command}" ]; then
+  if [ "$#" -eq 0 ]; then
+    container_exec_command="bash"
+  else
+    container_exec_command="codex${codex_flags}${quoted_args}"
+  fi
+fi
+
+podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && ${container_exec_command}"

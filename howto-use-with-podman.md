@@ -20,6 +20,12 @@ Run Codex through the primary pod launcher:
 ./run-in-container.sh --work_dir /path/to/repo --full-auto
 ```
 
+If you run it without a command, it drops you into `bash` inside the Codex container:
+
+```bash
+./run-in-container.sh
+```
+
 The direct launcher creates a pod with stable human-readable names:
 
 - pod: `codex-<workspace>-<hash>`
@@ -54,6 +60,12 @@ FIREWALL_CONTAINER_IMAGE=codex-firewall
 CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=on-request
 CODEX_DANGEROUS_BYPASS=0
+PODMAN_POD_CREATE_ARGS=""
+PODMAN_FIREWALL_RUN_ARGS=""
+PODMAN_CODEX_RUN_ARGS=""
+PODMAN_EXEC_ARGS=""
+CONTAINER_EXEC_COMMAND=""
+STARTUP_SUMMARY_HOLD_SECONDS=2
 OPENAI_ALLOWED_DOMAINS="api.openai.com auth.openai.com chatgpt.com"
 EXTRA_ALLOWED_DOMAINS="deb.debian.org"
 EXTRA_ALLOWED_IPV4="1.1.1.1 8.8.8.0/24"
@@ -69,6 +81,33 @@ That avoids the `bwrap` path while still keeping approvals enabled. If you expli
 
 ```bash
 CODEX_DANGEROUS_BYPASS=1
+```
+
+For Podman-side experimentation, especially around networking or firewall behavior, you can inject extra arguments with:
+
+- `PODMAN_POD_CREATE_ARGS`
+- `PODMAN_FIREWALL_RUN_ARGS`
+- `PODMAN_CODEX_RUN_ARGS`
+- `PODMAN_EXEC_ARGS`
+
+These are appended to the corresponding `podman pod create` or `podman run` command.
+
+If you need to override the final in-container command entirely, use:
+
+```bash
+CONTAINER_EXEC_COMMAND="bash"
+```
+
+or for a one-off test:
+
+```bash
+PODMAN_EXEC_ARGS="--privileged" CONTAINER_EXEC_COMMAND="bash -lc 'env | sort'" ./run-in-container.sh ''
+```
+
+The launcher also pauses briefly after printing its startup summary. To change or disable that:
+
+```bash
+STARTUP_SUMMARY_HOLD_SECONDS=0
 ```
 
 The firewall sidecar is managed with `podman exec`. Useful commands:
