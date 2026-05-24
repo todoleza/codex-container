@@ -27,10 +27,19 @@ RUN dnf -y install --setopt=install_weak_deps=False \
     bubblewrap \
     nodejs24 \
     nodejs24-npm \
+    python3-requests \
+    python3-setuptools \
+    yt-dlp \
+    exiftool \
+    rsync \
+    tmux \
+    diff \
+    python-pip \
   && dnf clean all \
   && rm -rf /var/cache/dnf /var/cache/libdnf5
 
-RUN useradd --create-home --shell /usr/bin/zsh "${USERNAME}" \
+#RUN useradd --create-home --shell /usr/bin/zsh "${USERNAME}" \
+RUN useradd --create-home "${USERNAME}" \
   && mkdir -p /usr/local/share/npm-global \
   && chown -R "${USERNAME}:${USERNAME}" /usr/local/share
 
