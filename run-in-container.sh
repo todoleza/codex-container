@@ -17,6 +17,14 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
+: "${PROXY_CONTAINER_IMAGE:=${FIREWALL_CONTAINER_IMAGE}}"
+: "${PROXY_ENABLE:=1}"
+: "${PROXY_RUNTIME_DIR:=/run/codex-proxy}"
+: "${PROXY_SOCKET_PATH:=/run/codex-proxy/proxy.sock}"
+: "${PROXY_LISTEN_HOST:=localhost}"
+: "${PROXY_LISTEN_PORT:=1080}"
+: "${PROXY_UPSTREAM_HOST:=localhost}"
+: "${PROXY_UPSTREAM_PORT:=1080}"
 : "${CODEX_SANDBOX_MODE:=danger-full-access}"
 : "${CODEX_APPROVAL_POLICY:=on-request}"
 : "${CODEX_DANGEROUS_BYPASS:=0}"
@@ -38,6 +46,7 @@ read -r -a PODMAN_POD_CREATE_ARGS_ARRAY <<< "${PODMAN_POD_CREATE_ARGS}"
 read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
 read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
 read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
+PROXY_VOLUME_ARGS_ARRAY=()
 
 slugify() {
   local value="$1"
@@ -106,11 +115,22 @@ WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
 POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
 INFRA_NAME="${POD_NAME}-infra"
 FW_NAME="${POD_NAME}-fw"
+PROXY_NAME="${POD_NAME}-proxy"
 CONTAINER_NAME="${POD_NAME}-app"
 HOST_TZ=$(detect_host_tz)
+RUNTIME_BASE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
+: "${PROXY_RUNTIME_DIR_HOST:=${DEFAULT_PROXY_RUNTIME_DIR_HOST}}"
 
 cleanup() {
+  if [ -n "${PROXY_RUNTIME_DIR_HOST}" ]; then
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy.sock" >/dev/null 2>&1 || true
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy-socat.pid" >/dev/null 2>&1 || true
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/fw-socat.pid" >/dev/null 2>&1 || true
+    rmdir "${PROXY_RUNTIME_DIR_HOST}" >/dev/null 2>&1 || true
+  fi
   podman rm --time=1.5 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$PROXY_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
   podman pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
@@ -130,6 +150,13 @@ validate_ipv4() {
 validate_ipv6() {
   local address="$1"
   [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
+}
+
+validate_port() {
+  local port="$1"
+
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  (( port >= 1 && port <= 65535 ))
 }
 
 validate_sandbox_mode() {
@@ -161,6 +188,24 @@ hold_startup_summary() {
   fi
 }
 
+proxy_enabled() {
+  (( PROXY_ENABLE ))
+}
+
+prepare_proxy_runtime_dir() {
+  proxy_enabled || return
+
+  mkdir -p "${PROXY_RUNTIME_DIR_HOST}" || {
+    echo "Warning: could not create proxy runtime dir at ${PROXY_RUNTIME_DIR_HOST}; disabling proxy relay." >&2
+    PROXY_ENABLE=0
+  }
+
+  chmod 0777 "${PROXY_RUNTIME_DIR_HOST}" || {
+    echo "Warning: could not relax proxy runtime dir permissions at ${PROXY_RUNTIME_DIR_HOST}; disabling proxy relay." >&2
+    PROXY_ENABLE=0
+  }
+}
+
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
   exit 1
@@ -176,6 +221,11 @@ if [[ "${CODEX_DANGEROUS_BYPASS}" != "0" && "${CODEX_DANGEROUS_BYPASS}" != "1" ]
   exit 1
 fi
 
+if [[ "${PROXY_ENABLE}" != "0" && "${PROXY_ENABLE}" != "1" ]]; then
+  echo "Error: PROXY_ENABLE must be 0 or 1." >&2
+  exit 1
+fi
+
 if ! validate_sandbox_mode "${CODEX_SANDBOX_MODE}"; then
   echo "Error: Invalid CODEX_SANDBOX_MODE: ${CODEX_SANDBOX_MODE}" >&2
   exit 1
@@ -183,6 +233,16 @@ fi
 
 if ! validate_approval_policy "${CODEX_APPROVAL_POLICY}"; then
   echo "Error: Invalid CODEX_APPROVAL_POLICY: ${CODEX_APPROVAL_POLICY}" >&2
+  exit 1
+fi
+
+if ! validate_port "${PROXY_LISTEN_PORT}"; then
+  echo "Error: Invalid PROXY_LISTEN_PORT: ${PROXY_LISTEN_PORT}" >&2
+  exit 1
+fi
+
+if ! validate_port "${PROXY_UPSTREAM_PORT}"; then
+  echo "Error: Invalid PROXY_UPSTREAM_PORT: ${PROXY_UPSTREAM_PORT}" >&2
   exit 1
 fi
 
@@ -217,6 +277,7 @@ echo "pod: ${POD_NAME}"
 echo "workdir: ${WORK_DIR}"
 echo "runtime image: ${CONTAINER_IMAGE}"
 echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
+echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
 echo "timezone: ${HOST_TZ}"
 echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
 if [ -n "${EXTRA_ALLOWED_IPV4}" ]; then
@@ -237,6 +298,12 @@ fi
 if [ -n "${PODMAN_EXEC_ARGS}" ]; then
   echo "podman exec args: ${PODMAN_EXEC_ARGS}"
 fi
+if [ "${PROXY_ENABLE}" = "1" ]; then
+  echo "proxy relay: ${PROXY_LISTEN_HOST}:${PROXY_LISTEN_PORT} -> ${PROXY_UPSTREAM_HOST}:${PROXY_UPSTREAM_PORT}"
+  echo "proxy socket: ${PROXY_RUNTIME_DIR_HOST}/proxy.sock -> ${PROXY_SOCKET_PATH}"
+else
+  echo "proxy relay: disabled"
+fi
 if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
   echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
 else
@@ -251,6 +318,8 @@ fi
 hold_startup_summary
 
 cleanup
+prepare_proxy_runtime_dir
+proxy_enabled && PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
 
 podman pod create \
   --name "$POD_NAME" \
@@ -265,9 +334,38 @@ podman run --name "$FW_NAME" -d \
   -e TZ="${HOST_TZ}" \
   --cap-add=NET_ADMIN \
   --security-opt=no-new-privileges \
+  "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
   "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
   "${FIREWALL_CONTAINER_IMAGE}" \
   sleep infinity
+
+start_proxy_container() {
+  proxy_enabled || return
+
+  podman run --name "$PROXY_NAME" -d \
+    --network host \
+    -e TZ="${HOST_TZ}" \
+    --security-opt=no-new-privileges \
+    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
+    "${PROXY_CONTAINER_IMAGE}" \
+    sh -c '
+      set -eu
+      runtime_dir=$1
+      socket_path=$2
+      upstream_host=$3
+      upstream_port=$4
+
+      install -d -m 777 "$runtime_dir"
+      rm -f "$socket_path" "$runtime_dir/proxy-socat.pid"
+      umask 000
+      printf "%s\n" "$$" > "$runtime_dir/proxy-socat.pid"
+      exec socat "UNIX-LISTEN:${socket_path},reuseaddr,fork,mode=777" "TCP:${upstream_host}:${upstream_port}"
+    ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_SOCKET_PATH}" "${PROXY_UPSTREAM_HOST}" "${PROXY_UPSTREAM_PORT}" || {
+      echo "Warning: proxy container did not start cleanly in ${PROXY_NAME}; continuing without a hard failure." >&2
+    }
+}
+
+start_proxy_container
 
 podman exec "$FW_NAME" firewall-init
 
@@ -284,6 +382,28 @@ for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
 done
 
 podman exec "$FW_NAME" firewall-reload
+
+start_proxy() {
+  proxy_enabled || return
+
+  podman exec -d "$FW_NAME" sh -c '
+    set -eu
+    runtime_dir=$1
+    listen_host=$2
+    listen_port=$3
+    socket_path=$4
+
+    install -d -m 777 "$runtime_dir"
+    rm -f "$runtime_dir/fw-socat.pid"
+    umask 000
+    printf "%s\n" "$$" > "$runtime_dir/fw-socat.pid"
+    exec socat "TCP-LISTEN:${listen_port},bind=${listen_host},reuseaddr,fork" "UNIX-CONNECT:${socket_path}"
+  ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_LISTEN_HOST}" "${PROXY_LISTEN_PORT}" "${PROXY_SOCKET_PATH}" || {
+    echo "Warning: pod proxy relay did not start cleanly in ${FW_NAME}; continuing without a hard failure." >&2
+  }
+}
+
+start_proxy
 
 podman run --name "$CONTAINER_NAME" -d \
   --pod "$POD_NAME" \

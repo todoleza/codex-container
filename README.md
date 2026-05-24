@@ -24,6 +24,7 @@ CONTAINER_CLI=podman ./build-images.sh
   - current workable path
   - keeps Codex sandbox resources available inside the runtime image
   - defaults Codex itself to `--sandbox danger-full-access` and prints the active policy on startup
+  - starts an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - opens an interactive `bash` in the container when no command is given
 - `run-in-podman-kube.sh`

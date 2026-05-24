@@ -31,6 +31,7 @@ The direct launcher creates a pod with stable human-readable names:
 - pod: `codex-<workspace>-<hash>`
 - infra: `codex-<workspace>-<hash>-infra`
 - firewall: `codex-<workspace>-<hash>-fw`
+- proxy: `codex-<workspace>-<hash>-proxy`
 - app: `codex-<workspace>-<hash>-app`
 
 The launcher:
@@ -57,6 +58,15 @@ Optional environment variables:
 ```bash
 CONTAINER_IMAGE=codex
 FIREWALL_CONTAINER_IMAGE=codex-firewall
+PROXY_CONTAINER_IMAGE=codex-firewall
+PROXY_ENABLE=1
+PROXY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-proxy
+PROXY_RUNTIME_DIR=/run/codex-proxy
+PROXY_SOCKET_PATH=/run/codex-proxy/proxy.sock
+PROXY_LISTEN_HOST=localhost
+PROXY_LISTEN_PORT=1080
+PROXY_UPSTREAM_HOST=localhost
+PROXY_UPSTREAM_PORT=1080
 CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=on-request
 CODEX_DANGEROUS_BYPASS=0
@@ -71,6 +81,13 @@ EXTRA_ALLOWED_DOMAINS="deb.debian.org"
 EXTRA_ALLOWED_IPV4="1.1.1.1 8.8.8.0/24"
 EXTRA_ALLOWED_IPV6="2606:4700:4700::1111 2001:4860:4860::/48"
 ```
+
+The proxy path is split in two:
+
+- the firewall sidecar listens on `localhost:1080` inside the pod and forwards to a Unix socket under `/run/codex-proxy`
+- a dedicated `proxy` container mounts the matching host path at `/run/user/<uid>/codex-<workspace>-<hash>-proxy/proxy.sock` and relays it to `localhost:1080` on the host by default
+
+Set `PROXY_ENABLE=0` to skip it entirely, or override `PROXY_UPSTREAM_HOST` / `PROXY_UPSTREAM_PORT` if your host-side SOCKS service lives somewhere else.
 
 The primary launcher defaults to:
 
