@@ -1,11 +1,13 @@
-# Codex Podman Prototype
+# codex-cli in podman
 
-This directory is a stripped-down prototype for running Codex in a rootless Podman pod with:
+This repo creates container with Codex CLI in a rootless Podman pod with:
 
 - a Fedora-based Codex runtime image
 - a minimal Alpine firewall sidecar
 - a direct Podman launcher
 - an experimental `podman kube play` launcher
+- provides a working security-first container prototype
+- although the pod exposes socks proxy on port 1080, it is a plain forward to existing proxy. **It may be used by the agent for exfiltration of data.**
 
 The intended build flow is:
 
@@ -14,7 +16,9 @@ The intended build flow is:
 CONTAINER_CLI=podman ./build-images.sh
 ```
 
-`gen-dist.sh` stages `dist/codex.tgz`. The container build consumes that archive and does not run `pnpm`.
+`gen-dist.sh` stages `dist/codex.tgz`. The container build consumes that archive and does not run `pnpm` locally.
+
+More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md).
 
 ## Entry points
 
@@ -27,10 +31,10 @@ CONTAINER_CLI=podman ./build-images.sh
   - starts an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - opens an interactive `bash` in the container when no command is given
-- `run-in-podman-kube.sh`
+- `run-in-podman-kube.sh` - experimental
   - draft launcher
   - uses `podman kube play`
-  - not a confirmed workable solution yet
+  - explored as an alternative to pod commands, is too complicated and interactivity gets blocked by Fedora selinux policy
 
 ## Layout
 

@@ -1,10 +1,10 @@
 ## Podman workflow
 
-Build both images from `codex-cli/`:
+Build both images from `codex-container/`:
 
 ```bash
 ./gen-dist.sh
-CONTAINER_CLI=podman ./build-images.sh
+./build-images.sh
 ```
 
 `gen-dist.sh` is the step that stages `dist/codex.tgz`. `build_container.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
@@ -26,12 +26,19 @@ If you run it without a command, it drops you into `bash` inside the Codex conta
 ./run-in-container.sh
 ```
 
+eventually set up a symlink:
+
+```bash
+ln -sr ./run-in-container.sh ~/bin/codex.sh
+```
+
 The direct launcher creates a pod with stable human-readable names:
 
 - pod: `codex-<workspace>-<hash>`
 - infra: `codex-<workspace>-<hash>-infra`
 - firewall: `codex-<workspace>-<hash>-fw`
-- proxy: `codex-<workspace>-<hash>-proxy`
+- proxy: `codex-<workspace>-<hash>-proxy
+  optional functionality that exposes host's localhost:1080 in a restricted netns of the pod
 - app: `codex-<workspace>-<hash>-app`
 
 The launcher:
@@ -50,6 +57,7 @@ There is also a `podman kube play` path:
 ```
 
 That path renders a temporary kube manifest, sets `io.podman.annotations.userns=keep-id`, sets `io.podman.annotations.infra.name=<pod>-infra`, and then configures the firewall sidecar with `podman exec`.
+See README.md for general info about kube play.
 
 Treat the kube-play path as a draft, not as a supported or confirmed-working deployment shape. It exists to capture the current experiment, not as the recommended way to run this prototype.
 
