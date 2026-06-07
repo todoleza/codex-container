@@ -5,40 +5,10 @@ ENV TZ="${TZ}"
 
 ARG USERNAME=node
 
-RUN dnf -y install --setopt=install_weak_deps=False \
-    aggregate \
-    ca-certificates \
-    curl \
-    bind-utils \
-    fzf \
-    gh \
-    git \
-    gnupg2 \
-    iproute \
-    jq \
-    less \
-    procps-ng \
-    unzip \
-    ripgrep \
-    zsh \
-    python3 \
-    yamllint \
-    ShellCheck \
-    bubblewrap \
-    nodejs24 \
-    nodejs24-npm \
-    python3-requests \
-    python3-setuptools \
-    yt-dlp \
-    exiftool \
-    rsync \
-    tmux \
-    diff \
-    python-pip \
-  && dnf clean all \
-  && rm -rf /var/cache/dnf /var/cache/libdnf5
+RUN dnf -y makecache
 
-#RUN useradd --create-home --shell /usr/bin/zsh "${USERNAME}" \
+# DNF_DROPINS
+
 RUN useradd --create-home "${USERNAME}" \
   && mkdir -p /usr/local/share/npm-global \
   && chown -R "${USERNAME}:${USERNAME}" /usr/local/share

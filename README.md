@@ -18,6 +18,11 @@ CONTAINER_CLI=podman ./build-images.sh
 
 `gen-dist.sh` stages `dist/codex.tgz`. The container build consumes that archive and does not run `pnpm` locally.
 
+The runtime image is generated from `Dockerfile.in`; `build-images.sh` expands
+sorted `container-deps/*.dnf` drop-ins into separate DNF install layers. Runtime
+builds reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
+set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it.
+
 More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md).
 
 ## Entry points
@@ -38,8 +43,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
 
 ## Layout
 
-- `Dockerfile`
-  - Fedora Codex runtime image
+- `Dockerfile.in`
+  - Fedora Codex runtime image, with DNF package groups included from `container-deps/`
 - `Dockerfile.firewall`
   - Alpine firewall sidecar image
 - `firewall/`

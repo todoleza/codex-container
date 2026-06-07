@@ -1,0 +1,9 @@
+python3-requests
+python3-setuptools
+yt-dlp
+exiftool
+rsync
+tmux
+diffutils
+python-pip
+parallel

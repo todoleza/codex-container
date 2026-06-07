@@ -7,7 +7,13 @@ Build both images from `codex-container/`:
 ./build-images.sh
 ```
 
-`gen-dist.sh` is the step that stages `dist/codex.tgz`. `build_container.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
+`gen-dist.sh` is the step that stages `dist/codex.tgz`. `build-images.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
+
+The runtime build is generated from `Dockerfile.in`. Sorted
+`container-deps/*.dnf` drop-ins become separate DNF install layers, and
+`build-images.sh` mounts a persistent DNF cache from `.build-cache/dnf-fedora-44`
+by default. Override that location with
+`DNF_CACHE_DIR=/path/to/cache ./build-images.sh`.
 
 This produces:
 
