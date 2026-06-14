@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+REAL_CODEX_BIN="${CODEX_REAL_BIN:-/usr/local/share/npm-global/bin/codex}"
+SANDBOX_MODE="${CODEX_SANDBOX_MODE:-danger-full-access}"
+APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
+DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS:-0}"
+
+has_arg() {
+  local wanted="$1"
+  shift
+
+  for arg in "$@"; do
+    if [ "${arg}" = "${wanted}" ] || [[ "${arg}" == "${wanted}="* ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if [ ! -x "${REAL_CODEX_BIN}" ]; then
+  echo "Error: Codex binary not found or not executable: ${REAL_CODEX_BIN}" >&2
+  exit 127
+fi
+
+default_flags=()
+if has_arg "--dangerously-bypass-approvals-and-sandbox" "$@"; then
+  :
+elif [ "${DANGEROUS_BYPASS}" = "1" ]; then
+  if ! has_arg "--dangerously-bypass-approvals-and-sandbox" "$@"; then
+    default_flags+=(--dangerously-bypass-approvals-and-sandbox)
+  fi
+else
+  if ! has_arg "--sandbox" "$@"; then
+    default_flags+=(--sandbox "${SANDBOX_MODE}")
+  fi
+  if ! has_arg "--ask-for-approval" "$@"; then
+    default_flags+=(--ask-for-approval "${APPROVAL_POLICY}")
+  fi
+fi
+
+exec "${REAL_CODEX_BIN}" "${default_flags[@]}" "$@"

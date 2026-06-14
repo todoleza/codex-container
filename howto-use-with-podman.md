@@ -47,9 +47,11 @@ The direct launcher creates a pod with stable human-readable names:
 - pod: `codex-<workspace>-<hash>`
 - infra: `codex-<workspace>-<hash>-infra`
 - firewall: `codex-<workspace>-<hash>-fw`
-- proxy: `codex-<workspace>-<hash>-proxy
-  optional functionality that exposes host's localhost:1080 in a restricted netns of the pod
+- proxy: `codex-<workspace>-<hash>-proxy`
 - app: `codex-<workspace>-<hash>-app`
+
+The proxy container is optional functionality that exposes the host's
+`localhost:1080` in the restricted network namespace of the pod.
 
 The launcher:
 
@@ -58,7 +60,28 @@ The launcher:
 - programs IPv4 and IPv6 egress rules with `nftables`
 - starts an unprivileged Codex container in the same pod network namespace
 - propagates the workstation timezone into both containers via `TZ`, falling back to `UTC` if detection fails
+- propagates `CODEX_WORKDIR`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_DANGEROUS_BYPASS` into the app container
 - prints a short startup summary including the current Codex sandbox/approval policy and domain allowlist
+
+The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
+process started inside the app container gets the propagated sandbox and
+approval defaults unless the command line already sets them. The image also
+installs a shell profile hook that changes interactive shells into
+`CODEX_WORKDIR`, so direct `podman exec` shells land in the mounted repo.
+
+To run multiple Codex instances for the same folder, keep one launcher shell
+open with:
+
+```bash
+./run-in-container.sh --work_dir /path/to/repo
+```
+
+Then start additional sessions against the existing app container:
+
+```bash
+podman exec -it codex-<workspace>-<hash>-app bash
+podman exec -it codex-<workspace>-<hash>-app codex
+```
 
 There is also a `podman kube play` path:
 

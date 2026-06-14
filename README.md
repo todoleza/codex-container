@@ -36,7 +36,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - uses `podman pod create` directly
   - current workable path
   - keeps Codex sandbox resources available inside the runtime image
-  - defaults Codex itself to `--sandbox danger-full-access` and prints the active policy on startup
+  - defaults Codex itself to `--sandbox danger-full-access` and propagates that policy into the app container
+  - starts interactive shells in the mounted workspace via an image profile hook
   - starts an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - opens an interactive `bash` in the container when no command is given
@@ -49,6 +50,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
 
 - `Dockerfile.in`
   - Fedora Codex runtime image, with DNF package groups included from `container-deps/`
+- `container-runtime/`
+  - image-side Codex wrapper and shell profile hook
 - `Dockerfile.firewall`
   - Alpine firewall sidecar image
 - `firewall/`

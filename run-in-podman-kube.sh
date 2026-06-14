@@ -8,6 +8,9 @@ OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com auth.openai.com
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
+: "${CODEX_SANDBOX_MODE:=danger-full-access}"
+: "${CODEX_APPROVAL_POLICY:=on-request}"
+: "${CODEX_DANGEROUS_BYPASS:=0}"
 
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
@@ -125,6 +128,22 @@ validate_ipv6() {
   [[ "${address}" =~ ^[0-9A-Fa-f:/]+$ ]]
 }
 
+validate_sandbox_mode() {
+  local mode="$1"
+  case "${mode}" in
+    read-only|workspace-write|danger-full-access) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_approval_policy() {
+  local policy="$1"
+  case "${policy}" in
+    untrusted|on-failure|on-request|never) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
   exit 1
@@ -137,6 +156,21 @@ fi
 
 if ! command -v podman >/dev/null 2>&1; then
   echo "Error: podman is not installed." >&2
+  exit 1
+fi
+
+if [[ "${CODEX_DANGEROUS_BYPASS}" != "0" && "${CODEX_DANGEROUS_BYPASS}" != "1" ]]; then
+  echo "Error: CODEX_DANGEROUS_BYPASS must be 0 or 1." >&2
+  exit 1
+fi
+
+if ! validate_sandbox_mode "${CODEX_SANDBOX_MODE}"; then
+  echo "Error: Invalid CODEX_SANDBOX_MODE: ${CODEX_SANDBOX_MODE}" >&2
+  exit 1
+fi
+
+if ! validate_approval_policy "${CODEX_APPROVAL_POLICY}"; then
+  echo "Error: Invalid CODEX_APPROVAL_POLICY: ${CODEX_APPROVAL_POLICY}" >&2
   exit 1
 fi
 
@@ -200,6 +234,14 @@ spec:
           value: "${OPENAI_API_KEY:-}"
         - name: TZ
           value: "${HOST_TZ}"
+        - name: CODEX_WORKDIR
+          value: "/app${WORK_DIR}"
+        - name: CODEX_SANDBOX_MODE
+          value: "${CODEX_SANDBOX_MODE}"
+        - name: CODEX_APPROVAL_POLICY
+          value: "${CODEX_APPROVAL_POLICY}"
+        - name: CODEX_DANGEROUS_BYPASS
+          value: "${CODEX_DANGEROUS_BYPASS}"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

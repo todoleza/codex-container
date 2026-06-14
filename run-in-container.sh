@@ -409,6 +409,10 @@ podman run --name "$CONTAINER_NAME" -d \
   --pod "$POD_NAME" \
   -e OPENAI_API_KEY \
   -e TZ="${HOST_TZ}" \
+  -e CODEX_WORKDIR="/app${WORK_DIR}" \
+  -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
+  -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
+  -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --user "$(id -u):$(id -g)" \
