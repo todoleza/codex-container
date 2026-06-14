@@ -1,11 +1,13 @@
 #!/bin/bash
 
-if [ -n "${CODEX_WORKDIR:-}" ] && [ -d "${CODEX_WORKDIR}" ]; then
+workspace_dir="${CODEX_WORKDIR:-}"
+
+if [ -n "${workspace_dir}" ] && [ -d "${workspace_dir}" ]; then
   case "${PWD}" in
-    "${CODEX_WORKDIR}"|"${CODEX_WORKDIR}"/*)
+    "${workspace_dir}"|"${workspace_dir}"/*)
       ;;
     *)
-      cd "${CODEX_WORKDIR}" || true
+      cd "${workspace_dir}" || true
       ;;
   esac
 fi

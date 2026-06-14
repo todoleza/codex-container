@@ -1,15 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Usage:
-#   ./run-in-container.sh [--work_dir directory] ["COMMAND"]
-#
-#   Examples:
-#     ./run-in-container.sh --work_dir project/code "ls -la"
-#     ./run-in-container.sh "echo Hello, world!"
-#     ./run-in-container.sh
-
-# Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${OPENAI_ALLOWED_DOMAINS:=api.openai.com auth.openai.com chatgpt.com}"
 : "${EXTRA_ALLOWED_DOMAINS:=}"
@@ -47,6 +38,39 @@ read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
 read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
 read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
 PROXY_VOLUME_ARGS_ARRAY=()
+ACTION="start"
+ACTION_ARGS=()
+START_ARGS=()
+
+usage() {
+  cat <<'EOF'
+Usage:
+  run-in-container.sh [--wd DIR] [CODEX_ARGS...]
+  run-in-container.sh [--wd DIR] help
+  run-in-container.sh [--wd DIR] spawn
+  run-in-container.sh [--wd DIR] enter [COMMAND...]
+  run-in-container.sh [--wd DIR] shell COMMAND...
+  run-in-container.sh [--wd DIR] replace [CODEX_ARGS...]
+  run-in-container.sh [--wd DIR] destroy|rm|kill
+  run-in-container.sh [--wd DIR] copy|push LOCAL_PATH CONTAINER_PATH
+  run-in-container.sh [--wd DIR] pull|fetch CONTAINER_PATH LOCAL_PATH
+
+Launcher commands:
+  help          Show this help. Use --help for Codex CLI help.
+  spawn         Start the workspace pod in the background and exit.
+  enter         Enter the running workspace container with a TTY. Defaults to bash.
+  shell         Run a command in the running workspace container without a TTY.
+  replace       Remove any existing workspace pod, then start Codex normally.
+  destroy, rm   Remove the workspace pod and exit.
+  kill          Immediately remove the workspace pod and exit.
+  copy, push    Copy from the host into the workspace container.
+  pull, fetch   Copy from the workspace container to the host.
+
+Only --wd is parsed by this launcher. Other dash arguments are passed to Codex.
+Relative container copy paths resolve under the preserved /app host path. Local
+copy paths are resolved to absolute host paths before calling podman cp.
+EOF
+}
 
 slugify() {
   local value="$1"
@@ -99,44 +123,6 @@ detect_host_tz() {
   printf 'UTC'
 }
 
-if [ "${1:-}" = "--work_dir" ]; then
-  if [ -z "${2:-}" ]; then
-    echo "Error: --work_dir flag provided but no directory specified."
-    exit 1
-  fi
-  WORK_DIR="$2"
-  shift 2
-fi
-
-WORK_DIR=$(realpath "$WORK_DIR")
-
-WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
-WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
-POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
-INFRA_NAME="${POD_NAME}-infra"
-FW_NAME="${POD_NAME}-fw"
-PROXY_NAME="${POD_NAME}-proxy"
-CONTAINER_NAME="${POD_NAME}-app"
-HOST_TZ=$(detect_host_tz)
-RUNTIME_BASE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
-: "${PROXY_RUNTIME_DIR_HOST:=${DEFAULT_PROXY_RUNTIME_DIR_HOST}}"
-
-cleanup() {
-  if [ -n "${PROXY_RUNTIME_DIR_HOST}" ]; then
-    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy.sock" >/dev/null 2>&1 || true
-    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy-socat.pid" >/dev/null 2>&1 || true
-    rm -f "${PROXY_RUNTIME_DIR_HOST}/fw-socat.pid" >/dev/null 2>&1 || true
-    rmdir "${PROXY_RUNTIME_DIR_HOST}" >/dev/null 2>&1 || true
-  fi
-  podman rm --time=1.5 -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  podman rm --time=0 -f "$PROXY_NAME" >/dev/null 2>&1 || true
-  podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
-  podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
-  podman pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 validate_domain() {
   local domain="$1"
   [[ "${domain}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]\.[A-Za-z]{2,}$ ]]
@@ -175,6 +161,47 @@ validate_approval_policy() {
   esac
 }
 
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --wd)
+        if [ -z "${2:-}" ]; then
+          echo "Error: --wd flag provided but no directory specified." >&2
+          exit 1
+        fi
+        WORK_DIR="$2"
+        shift 2
+        ;;
+      --work_dir)
+        echo "Error: --work_dir has been replaced by --wd." >&2
+        exit 1
+        ;;
+      --)
+        shift
+        START_ARGS=("$@")
+        return
+        ;;
+      -*)
+        START_ARGS=("$@")
+        return
+        ;;
+      *)
+        case "$1" in
+          help|spawn|enter|shell|replace|destroy|rm|kill|copy|push|pull|fetch)
+            ACTION="$1"
+            shift
+            ACTION_ARGS=("$@")
+            ;;
+          *)
+            START_ARGS=("$@")
+            ;;
+        esac
+        return
+        ;;
+    esac
+  done
+}
+
 hold_startup_summary() {
   if [ "${STARTUP_SUMMARY_HOLD_SECONDS}" = "0" ]; then
     return
@@ -205,6 +232,361 @@ prepare_proxy_runtime_dir() {
     PROXY_ENABLE=0
   }
 }
+
+resource_exists() {
+  podman container exists "${CONTAINER_NAME}" \
+    || podman container exists "${FW_NAME}" \
+    || podman container exists "${PROXY_NAME}" \
+    || podman container exists "${INFRA_NAME}" \
+    || podman pod exists "${POD_NAME}"
+}
+
+app_running() {
+  podman container exists "${CONTAINER_NAME}" \
+    && [ "$(podman inspect --format '{{.State.Running}}' "${CONTAINER_NAME}")" = "true" ]
+}
+
+cleanup_resources() {
+  local mode="${1:-graceful}"
+  local app_time="1.5"
+
+  if [ "${mode}" = "immediate" ]; then
+    app_time="0"
+  fi
+
+  if [ -n "${PROXY_RUNTIME_DIR_HOST}" ]; then
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy.sock" >/dev/null 2>&1 || true
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/proxy-socat.pid" >/dev/null 2>&1 || true
+    rm -f "${PROXY_RUNTIME_DIR_HOST}/fw-socat.pid" >/dev/null 2>&1 || true
+    rmdir "${PROXY_RUNTIME_DIR_HOST}" >/dev/null 2>&1 || true
+  fi
+  podman rm --time="${app_time}" -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$PROXY_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
+  podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
+  podman pod rm --time=0 -f "$POD_NAME" >/dev/null 2>&1 || true
+}
+
+exec_in_app() {
+  local tty_mode="$1"
+  shift
+  local exec_args=(-i)
+
+  if [ "${tty_mode}" = "tty" ]; then
+    exec_args+=(-t)
+  fi
+
+  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" -w "/app${WORK_DIR}" "${CONTAINER_NAME}" "$@"
+}
+
+exec_shell_action() {
+  local tty_mode="$1"
+  shift
+
+  if ! app_running; then
+    echo "Error: ${CONTAINER_NAME} is not running." >&2
+    echo "Start it first with: $0 --wd ${WORK_DIR}" >&2
+    exit 1
+  fi
+
+  if [ "$#" -eq 0 ]; then
+    if [ "${tty_mode}" = "tty" ]; then
+      set -- bash
+    else
+      echo "Error: shell requires a command." >&2
+      usage >&2
+      exit 1
+    fi
+  fi
+
+  exec_in_app "${tty_mode}" "$@"
+  exit $?
+}
+
+local_copy_path() {
+  local path="$1"
+  local parent
+  local base
+
+  if [ -e "${path}" ]; then
+    realpath "${path}"
+    return
+  fi
+
+  parent=$(dirname "${path}")
+  base=$(basename "${path}")
+  if [ -d "${parent}" ]; then
+    printf '%s/%s\n' "$(realpath "${parent}")" "${base}"
+    return
+  fi
+
+  realpath -m "${path}"
+}
+
+container_copy_path() {
+  local path="$1"
+
+  case "${path}" in
+    /*) printf '%s\n' "${path}" ;;
+    *) printf '/app%s/%s\n' "${WORK_DIR}" "${path}" ;;
+  esac
+}
+
+copy_into_container() {
+  if [ "${#ACTION_ARGS[@]}" -ne 2 ]; then
+    echo "Error: ${ACTION} requires LOCAL_PATH and CONTAINER_PATH." >&2
+    usage >&2
+    exit 1
+  fi
+  if ! app_running; then
+    echo "Error: ${CONTAINER_NAME} is not running." >&2
+    exit 1
+  fi
+
+  local src
+  local dst
+  src=$(local_copy_path "${ACTION_ARGS[0]}")
+  dst=$(container_copy_path "${ACTION_ARGS[1]}")
+
+  echo "copying into container: ${src} -> ${dst}"
+  podman cp "${src}" "${CONTAINER_NAME}:${dst}"
+}
+
+copy_out_of_container() {
+  if [ "${#ACTION_ARGS[@]}" -ne 2 ]; then
+    echo "Error: ${ACTION} requires CONTAINER_PATH and LOCAL_PATH." >&2
+    usage >&2
+    exit 1
+  fi
+  if ! app_running; then
+    echo "Error: ${CONTAINER_NAME} is not running." >&2
+    exit 1
+  fi
+
+  local src
+  local dst
+  src=$(container_copy_path "${ACTION_ARGS[0]}")
+  dst=$(local_copy_path "${ACTION_ARGS[1]}")
+
+  echo "copying out of container: ${src} -> ${dst}"
+  podman cp "${CONTAINER_NAME}:${src}" "${dst}"
+}
+
+run_codex_in_app() {
+  if [ -n "${CONTAINER_EXEC_COMMAND}" ]; then
+    exec_in_app tty bash -lc "${CONTAINER_EXEC_COMMAND}"
+    exit $?
+  fi
+
+  exec_in_app tty codex "${START_ARGS[@]}"
+  exit $?
+}
+
+prompt_existing_container() {
+  local choice
+
+  if ! [ -t 0 ] || ! [ -t 1 ]; then
+    echo "Error: ${CONTAINER_NAME} is already running." >&2
+    echo "Use one of: enter, shell, replace, destroy, rm, kill." >&2
+    exit 1
+  fi
+
+  echo "${CONTAINER_NAME} is already running."
+  while true; do
+    read -r -p "Enter existing, replace it, or cancel? [e/r/c] " choice
+    case "${choice}" in
+      e|E|enter|Enter)
+        exec_shell_action tty
+        ;;
+      r|R|replace|Replace)
+        ACTION="replace"
+        return
+        ;;
+      c|C|cancel|Cancel|"")
+        echo "cancelled"
+        exit 0
+        ;;
+      *)
+        echo "Please answer enter, replace, or cancel."
+        ;;
+    esac
+  done
+}
+
+print_startup_summary() {
+  echo "== Codex Podman Prototype =="
+  echo "pod: ${POD_NAME}"
+  echo "workdir: ${WORK_DIR}"
+  echo "runtime image: ${CONTAINER_IMAGE}"
+  echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
+  echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
+  echo "timezone: ${HOST_TZ}"
+  echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
+  if [ -n "${EXTRA_ALLOWED_IPV4}" ]; then
+    echo "extra allowed IPv4: ${EXTRA_ALLOWED_IPV4}"
+  fi
+  if [ -n "${EXTRA_ALLOWED_IPV6}" ]; then
+    echo "extra allowed IPv6: ${EXTRA_ALLOWED_IPV6}"
+  fi
+  if [ -n "${PODMAN_POD_CREATE_ARGS}" ]; then
+    echo "podman pod args: ${PODMAN_POD_CREATE_ARGS}"
+  fi
+  if [ -n "${PODMAN_FIREWALL_RUN_ARGS}" ]; then
+    echo "podman firewall args: ${PODMAN_FIREWALL_RUN_ARGS}"
+  fi
+  if [ -n "${PODMAN_CODEX_RUN_ARGS}" ]; then
+    echo "podman codex args: ${PODMAN_CODEX_RUN_ARGS}"
+  fi
+  if [ -n "${PODMAN_EXEC_ARGS}" ]; then
+    echo "podman exec args: ${PODMAN_EXEC_ARGS}"
+  fi
+  if [ "${PROXY_ENABLE}" = "1" ]; then
+    echo "proxy relay: ${PROXY_LISTEN_HOST}:${PROXY_LISTEN_PORT} -> ${PROXY_UPSTREAM_HOST}:${PROXY_UPSTREAM_PORT}"
+    echo "proxy socket: ${PROXY_RUNTIME_DIR_HOST}/proxy.sock -> ${PROXY_SOCKET_PATH}"
+  else
+    echo "proxy relay: disabled"
+  fi
+  if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
+    echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
+  else
+    echo "codex sandbox: ${CODEX_SANDBOX_MODE}"
+    echo "codex approvals: ${CODEX_APPROVAL_POLICY}"
+  fi
+  if [ -n "${CONTAINER_EXEC_COMMAND}" ]; then
+    echo "container exec override: ${CONTAINER_EXEC_COMMAND}"
+  else
+    echo "container exec default: codex"
+  fi
+}
+
+start_proxy_container() {
+  proxy_enabled || return
+
+  podman run --name "$PROXY_NAME" -d \
+    --network host \
+    -e TZ="${HOST_TZ}" \
+    --security-opt=no-new-privileges \
+    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
+    "${PROXY_CONTAINER_IMAGE}" \
+    sh -c '
+      set -eu
+      runtime_dir=$1
+      socket_path=$2
+      upstream_host=$3
+      upstream_port=$4
+
+      install -d -m 777 "$runtime_dir"
+      rm -f "$socket_path" "$runtime_dir/proxy-socat.pid"
+      umask 000
+      printf "%s\n" "$$" > "$runtime_dir/proxy-socat.pid"
+      exec socat "UNIX-LISTEN:${socket_path},reuseaddr,fork,mode=777" "TCP:${upstream_host}:${upstream_port}"
+    ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_SOCKET_PATH}" "${PROXY_UPSTREAM_HOST}" "${PROXY_UPSTREAM_PORT}" || {
+      echo "Warning: proxy container did not start cleanly in ${PROXY_NAME}; continuing without a hard failure." >&2
+    }
+}
+
+start_proxy() {
+  proxy_enabled || return
+
+  podman exec -d "$FW_NAME" sh -c '
+    set -eu
+    runtime_dir=$1
+    listen_host=$2
+    listen_port=$3
+    socket_path=$4
+
+    install -d -m 777 "$runtime_dir"
+    rm -f "$runtime_dir/fw-socat.pid"
+    umask 000
+    printf "%s\n" "$$" > "$runtime_dir/fw-socat.pid"
+    exec socat "TCP-LISTEN:${listen_port},bind=${listen_host},reuseaddr,fork" "UNIX-CONNECT:${socket_path}"
+  ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_LISTEN_HOST}" "${PROXY_LISTEN_PORT}" "${PROXY_SOCKET_PATH}" || {
+    echo "Warning: pod proxy relay did not start cleanly in ${FW_NAME}; continuing without a hard failure." >&2
+  }
+}
+
+start_new_pod() {
+  cleanup_resources immediate
+  trap 'cleanup_resources graceful' EXIT
+  prepare_proxy_runtime_dir
+  proxy_enabled && PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
+
+  podman pod create \
+    --name "$POD_NAME" \
+    --infra-name "$INFRA_NAME" \
+    --network pasta \
+    --userns keep-id \
+    "${PODMAN_POD_CREATE_ARGS_ARRAY[@]}"
+
+  podman run --name "$FW_NAME" -d \
+    --pod "$POD_NAME" \
+    --user root \
+    -e TZ="${HOST_TZ}" \
+    --cap-add=NET_ADMIN \
+    --security-opt=no-new-privileges \
+    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
+    "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
+    "${FIREWALL_CONTAINER_IMAGE}" \
+    sleep infinity
+
+  start_proxy_container
+
+  podman exec "$FW_NAME" firewall-init
+
+  for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
+    podman exec "$FW_NAME" firewall-allow-domain "$domain"
+  done
+
+  for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
+    podman exec "$FW_NAME" firewall-allow-address "$address"
+  done
+
+  for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
+    podman exec "$FW_NAME" firewall-allow-address "$address"
+  done
+
+  podman exec "$FW_NAME" firewall-reload
+  start_proxy
+
+  podman run --name "$CONTAINER_NAME" -d \
+    --pod "$POD_NAME" \
+    -e OPENAI_API_KEY \
+    -e TZ="${HOST_TZ}" \
+    -e CODEX_WORKDIR="/app${WORK_DIR}" \
+    -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
+    -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
+    -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
+    --cap-drop=ALL \
+    --security-opt=no-new-privileges \
+    --user "$(id -u):$(id -g)" \
+    -v "$HOME/.codex:/home/node/.codex:z" \
+    -v "$WORK_DIR:/app$WORK_DIR" \
+    "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \
+    "${CONTAINER_IMAGE}" \
+    codex-container-init
+
+  trap - EXIT
+}
+
+parse_args "$@"
+
+if [ "${ACTION}" = "help" ]; then
+  usage
+  exit 0
+fi
+
+WORK_DIR=$(realpath "$WORK_DIR")
+WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
+WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
+POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
+INFRA_NAME="${POD_NAME}-infra"
+FW_NAME="${POD_NAME}-fw"
+PROXY_NAME="${POD_NAME}-proxy"
+CONTAINER_NAME="${POD_NAME}-app"
+HOST_TZ=$(detect_host_tz)
+RUNTIME_BASE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
+: "${PROXY_RUNTIME_DIR_HOST:=${DEFAULT_PROXY_RUNTIME_DIR_HOST}}"
 
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
@@ -272,176 +654,70 @@ for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
   fi
 done
 
-echo "== Codex Podman Prototype =="
-echo "pod: ${POD_NAME}"
-echo "workdir: ${WORK_DIR}"
-echo "runtime image: ${CONTAINER_IMAGE}"
-echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
-echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
-echo "timezone: ${HOST_TZ}"
-echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
-if [ -n "${EXTRA_ALLOWED_IPV4}" ]; then
-  echo "extra allowed IPv4: ${EXTRA_ALLOWED_IPV4}"
-fi
-if [ -n "${EXTRA_ALLOWED_IPV6}" ]; then
-  echo "extra allowed IPv6: ${EXTRA_ALLOWED_IPV6}"
-fi
-if [ -n "${PODMAN_POD_CREATE_ARGS}" ]; then
-  echo "podman pod args: ${PODMAN_POD_CREATE_ARGS}"
-fi
-if [ -n "${PODMAN_FIREWALL_RUN_ARGS}" ]; then
-  echo "podman firewall args: ${PODMAN_FIREWALL_RUN_ARGS}"
-fi
-if [ -n "${PODMAN_CODEX_RUN_ARGS}" ]; then
-  echo "podman codex args: ${PODMAN_CODEX_RUN_ARGS}"
-fi
-if [ -n "${PODMAN_EXEC_ARGS}" ]; then
-  echo "podman exec args: ${PODMAN_EXEC_ARGS}"
-fi
-if [ "${PROXY_ENABLE}" = "1" ]; then
-  echo "proxy relay: ${PROXY_LISTEN_HOST}:${PROXY_LISTEN_PORT} -> ${PROXY_UPSTREAM_HOST}:${PROXY_UPSTREAM_PORT}"
-  echo "proxy socket: ${PROXY_RUNTIME_DIR_HOST}/proxy.sock -> ${PROXY_SOCKET_PATH}"
-else
-  echo "proxy relay: disabled"
-fi
-if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
-  echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
-else
-  echo "codex sandbox: ${CODEX_SANDBOX_MODE}"
-  echo "codex approvals: ${CODEX_APPROVAL_POLICY}"
-fi
-if [ -n "${CONTAINER_EXEC_COMMAND}" ]; then
-  echo "container exec override: ${CONTAINER_EXEC_COMMAND}"
-elif [ "$#" -eq 0 ]; then
-  echo "container exec default: interactive bash"
-fi
+case "${ACTION}" in
+  spawn)
+    if app_running; then
+      echo "already running: ${CONTAINER_NAME}"
+      exit 0
+    fi
+    print_startup_summary
+    hold_startup_summary
+    start_new_pod
+    echo "spawned: ${CONTAINER_NAME}"
+    exit 0
+    ;;
+  enter)
+    exec_shell_action tty "${ACTION_ARGS[@]}"
+    ;;
+  shell)
+    exec_shell_action notty "${ACTION_ARGS[@]}"
+    ;;
+  destroy|rm)
+    if resource_exists; then
+      cleanup_resources graceful
+      echo "removed ${POD_NAME}"
+    else
+      echo "nothing to remove for ${POD_NAME}"
+    fi
+    exit 0
+    ;;
+  kill)
+    if resource_exists; then
+      cleanup_resources immediate
+      echo "killed ${POD_NAME}"
+    else
+      echo "nothing to kill for ${POD_NAME}"
+    fi
+    exit 0
+    ;;
+  copy|push)
+    copy_into_container
+    exit 0
+    ;;
+  pull|fetch)
+    copy_out_of_container
+    exit 0
+    ;;
+  replace)
+    if resource_exists; then
+      echo "replacing ${POD_NAME}"
+      cleanup_resources immediate
+    else
+      echo "nothing to replace for ${POD_NAME}; starting new pod"
+    fi
+    START_ARGS=("${ACTION_ARGS[@]}")
+    ;;
+  start)
+    if app_running; then
+      prompt_existing_container
+      if [ "${ACTION}" = "replace" ]; then
+        cleanup_resources immediate
+      fi
+    fi
+    ;;
+esac
+
+print_startup_summary
 hold_startup_summary
-
-cleanup
-prepare_proxy_runtime_dir
-proxy_enabled && PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
-
-podman pod create \
-  --name "$POD_NAME" \
-  --infra-name "$INFRA_NAME" \
-  --network pasta \
-  --userns keep-id \
-  "${PODMAN_POD_CREATE_ARGS_ARRAY[@]}"
-
-podman run --name "$FW_NAME" -d \
-  --pod "$POD_NAME" \
-  --user root \
-  -e TZ="${HOST_TZ}" \
-  --cap-add=NET_ADMIN \
-  --security-opt=no-new-privileges \
-  "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
-  "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
-  "${FIREWALL_CONTAINER_IMAGE}" \
-  sleep infinity
-
-start_proxy_container() {
-  proxy_enabled || return
-
-  podman run --name "$PROXY_NAME" -d \
-    --network host \
-    -e TZ="${HOST_TZ}" \
-    --security-opt=no-new-privileges \
-    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
-    "${PROXY_CONTAINER_IMAGE}" \
-    sh -c '
-      set -eu
-      runtime_dir=$1
-      socket_path=$2
-      upstream_host=$3
-      upstream_port=$4
-
-      install -d -m 777 "$runtime_dir"
-      rm -f "$socket_path" "$runtime_dir/proxy-socat.pid"
-      umask 000
-      printf "%s\n" "$$" > "$runtime_dir/proxy-socat.pid"
-      exec socat "UNIX-LISTEN:${socket_path},reuseaddr,fork,mode=777" "TCP:${upstream_host}:${upstream_port}"
-    ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_SOCKET_PATH}" "${PROXY_UPSTREAM_HOST}" "${PROXY_UPSTREAM_PORT}" || {
-      echo "Warning: proxy container did not start cleanly in ${PROXY_NAME}; continuing without a hard failure." >&2
-    }
-}
-
-start_proxy_container
-
-podman exec "$FW_NAME" firewall-init
-
-for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
-  podman exec "$FW_NAME" firewall-allow-domain "$domain"
-done
-
-for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
-  podman exec "$FW_NAME" firewall-allow-address "$address"
-done
-
-for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
-  podman exec "$FW_NAME" firewall-allow-address "$address"
-done
-
-podman exec "$FW_NAME" firewall-reload
-
-start_proxy() {
-  proxy_enabled || return
-
-  podman exec -d "$FW_NAME" sh -c '
-    set -eu
-    runtime_dir=$1
-    listen_host=$2
-    listen_port=$3
-    socket_path=$4
-
-    install -d -m 777 "$runtime_dir"
-    rm -f "$runtime_dir/fw-socat.pid"
-    umask 000
-    printf "%s\n" "$$" > "$runtime_dir/fw-socat.pid"
-    exec socat "TCP-LISTEN:${listen_port},bind=${listen_host},reuseaddr,fork" "UNIX-CONNECT:${socket_path}"
-  ' sh "${PROXY_RUNTIME_DIR}" "${PROXY_LISTEN_HOST}" "${PROXY_LISTEN_PORT}" "${PROXY_SOCKET_PATH}" || {
-    echo "Warning: pod proxy relay did not start cleanly in ${FW_NAME}; continuing without a hard failure." >&2
-  }
-}
-
-start_proxy
-
-podman run --name "$CONTAINER_NAME" -d \
-  --pod "$POD_NAME" \
-  -e OPENAI_API_KEY \
-  -e TZ="${HOST_TZ}" \
-  -e CODEX_WORKDIR="/app${WORK_DIR}" \
-  -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
-  -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
-  -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
-  --cap-drop=ALL \
-  --security-opt=no-new-privileges \
-  --user "$(id -u):$(id -g)" \
-  -v "$HOME/.codex:/home/node/.codex:z" \
-  -v "$WORK_DIR:/app$WORK_DIR" \
-  "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \
-  "${CONTAINER_IMAGE}" \
-  sleep infinity
-
-quoted_args=""
-for arg in "$@"; do
-  quoted_args+=" $(printf '%q' "$arg")"
-done
-
-codex_flags=""
-if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
-  codex_flags+=" --dangerously-bypass-approvals-and-sandbox"
-else
-  codex_flags+=" --sandbox $(printf '%q' "${CODEX_SANDBOX_MODE}")"
-  codex_flags+=" --ask-for-approval $(printf '%q' "${CODEX_APPROVAL_POLICY}")"
-fi
-
-container_exec_command="${CONTAINER_EXEC_COMMAND}"
-if [ -z "${container_exec_command}" ]; then
-  if [ "$#" -eq 0 ]; then
-    container_exec_command="bash"
-  else
-    container_exec_command="codex${codex_flags}${quoted_args}"
-  fi
-fi
-
-podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && ${container_exec_command}"
+start_new_pod
+run_codex_in_app

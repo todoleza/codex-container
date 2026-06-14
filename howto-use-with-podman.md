@@ -27,10 +27,10 @@ This produces:
 Run Codex through the primary pod launcher:
 
 ```bash
-./run-in-container.sh --work_dir /path/to/repo --full-auto
+./run-in-container.sh --wd /path/to/repo --full-auto
 ```
 
-If you run it without a command, it drops you into `bash` inside the Codex container:
+If you run it without a command, it starts Codex:
 
 ```bash
 ./run-in-container.sh
@@ -67,20 +67,52 @@ The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
 process started inside the app container gets the propagated sandbox and
 approval defaults unless the command line already sets them. The image also
 installs a shell profile hook that changes interactive shells into
-`CODEX_WORKDIR`, so direct `podman exec` shells land in the mounted repo.
+the preserved `/app<host-path>` mount, so Codex sees a stable absolute path.
 
-To run multiple Codex instances for the same folder, keep one launcher shell
-open with:
+The launcher parses only `--wd` as its own dash option. Other dash arguments are
+passed to Codex, so `--help` still means Codex CLI help. Use the non-dash
+`help` command for launcher help:
 
 ```bash
-./run-in-container.sh --work_dir /path/to/repo
+./run-in-container.sh help
+./run-in-container.sh --help
 ```
 
-Then start additional sessions against the existing app container:
+Launcher commands are selected by the first recognized non-dash argument:
 
 ```bash
-podman exec -it codex-<workspace>-<hash>-app bash
-podman exec -it codex-<workspace>-<hash>-app codex
+./run-in-container.sh --wd /path/to/repo spawn
+./run-in-container.sh --wd /path/to/repo enter
+./run-in-container.sh --wd /path/to/repo shell pwd
+./run-in-container.sh --wd /path/to/repo copy ./local.txt notes/local.txt
+./run-in-container.sh --wd /path/to/repo pull notes/out.txt ./out.txt
+./run-in-container.sh --wd /path/to/repo replace --model gpt-5
+./run-in-container.sh --wd /path/to/repo kill
+```
+
+`spawn` starts the workspace pod in the background and exits. `enter` runs an
+interactive TTY command in the preserved `/app<host-path>` mount, defaulting to
+`bash`.
+`shell` keeps stdin open but does not allocate a TTY, so `shell pwd` prints
+that absolute path. `copy`/`push` copy host paths into the container;
+`pull`/`fetch` copy container paths out. Relative container copy paths resolve
+under the same preserved mount; local copy paths such as `./file` are resolved
+to absolute host paths before calling `podman cp`.
+
+If a workspace container is already running and you start the launcher without
+an explicit launcher command, it offers to enter the existing container, replace
+it, or cancel. `replace` kills any existing workspace pod before normal startup.
+If there is nothing to kill, it prints that and continues.
+
+After the app container starts successfully, it stays running when a Codex or
+shell session exits. Use `destroy`, `rm`, or `kill` when you want to remove the
+workspace pod.
+
+For a short command available outside this repo, symlink the launcher:
+
+```bash
+ln -sr ./run-in-container.sh /tmp/codex.sh
+/tmp/codex.sh --wd /path/to/repo enter
 ```
 
 There is also a `podman kube play` path:

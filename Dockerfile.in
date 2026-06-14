@@ -14,9 +14,10 @@ RUN useradd --create-home "${USERNAME}" \
   && chown -R "${USERNAME}:${USERNAME}" /usr/local/share
 
 COPY container-runtime/codex /usr/local/bin/codex
+COPY container-runtime/init /usr/local/bin/codex-container-init
 COPY container-runtime/profile.sh /usr/local/share/codex-container/profile.sh
 
-RUN chmod 755 /usr/local/bin/codex /usr/local/share/codex-container/profile.sh \
+RUN chmod 755 /usr/local/bin/codex /usr/local/bin/codex-container-init /usr/local/share/codex-container/profile.sh \
   && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' > /etc/profile.d/codex-container.sh \
   && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' >> /home/"${USERNAME}"/.bashrc
 
