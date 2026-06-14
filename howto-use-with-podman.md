@@ -11,9 +11,13 @@ Build both images from `codex-container/`:
 
 The runtime build is generated from `Dockerfile.in`. Sorted
 `container-deps/*.dnf` drop-ins become separate DNF install layers, and
-`build-images.sh` mounts a persistent DNF cache from `.build-cache/dnf-fedora-44`
-by default. Override that location with
-`DNF_CACHE_DIR=/path/to/cache ./build-images.sh`.
+`build-images.sh` enables builder layer caching explicitly. It also mounts a
+persistent DNF cache from `.build-cache/dnf-fedora-44` by default. The default
+builder is `buildah bud`; set `CONTAINER_CLI=podman` to use Podman as an
+override. Override the DNF cache location with
+`DNF_CACHE_DIR=/path/to/cache ./build-images.sh`. The mounted DNF cache reduces
+package downloads, while the builder layer cache is what skips unchanged DNF
+install steps.
 
 This produces:
 

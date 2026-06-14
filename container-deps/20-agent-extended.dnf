@@ -7,3 +7,6 @@ tmux
 diffutils
 python-pip
 parallel
+strings
+man
+file

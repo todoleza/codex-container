@@ -9,7 +9,7 @@ Run Codex in an unprivileged container while enforcing outbound network policy f
 - `Dockerfile.in`: template for the generated Fedora-based Codex runtime image
 - `container-deps/`: globbed DNF package drop-ins for runtime install layers
 - `Dockerfile.firewall`: minimal Alpine firewall image
-- `build-images.sh`: top-level image builder consuming `dist/codex.tgz`
+- `build-images.sh`: top-level Buildah-first image builder consuming `dist/codex.tgz`
 
 The Codex image contains Codex and developer tooling only. The firewall image contains only the scripts and packages needed to manage nftables-based IPv4/IPv6 egress policy.
 

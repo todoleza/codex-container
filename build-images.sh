@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
-CONTAINER_CLI="${CONTAINER_CLI:-podman}"
+CONTAINER_CLI="${CONTAINER_CLI:-buildah}"
 DNF_CACHE_DIR="${DNF_CACHE_DIR:-${SCRIPT_DIR}/.build-cache/dnf-fedora-44}"
 GENERATED_DOCKERFILE="${SCRIPT_DIR}/.build-cache/Dockerfile.runtime"
 trap "popd >> /dev/null" EXIT
@@ -18,11 +18,19 @@ if [ ! -f ./dist/codex.tgz ]; then
   exit 1
 fi
 
-if [ "${CONTAINER_CLI}" != "podman" ]; then
-  echo "Error: runtime builds use Podman build cache volume mounts." >&2
-  echo "Set CONTAINER_CLI=podman for this build." >&2
-  exit 1
-fi
+case "${CONTAINER_CLI}" in
+  buildah)
+    BUILD_COMMAND=(buildah bud)
+    ;;
+  podman)
+    BUILD_COMMAND=(podman build)
+    ;;
+  *)
+    echo "Error: unsupported CONTAINER_CLI=${CONTAINER_CLI}." >&2
+    echo "Set CONTAINER_CLI=buildah or CONTAINER_CLI=podman." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "${DNF_CACHE_DIR}/dnf" "${DNF_CACHE_DIR}/libdnf5" "$(dirname "${GENERATED_DOCKERFILE}")"
 
@@ -46,7 +54,8 @@ generate_runtime_dockerfile() {
         found_marker=1
         for dep_file in "${dep_files[@]}"; do
           printf '# %s\n' "${dep_file}"
-          printf 'RUN dnf -y install --setopt=install_weak_deps=False \\\n'
+          printf 'RUN printf '\''Installing DNF drop-in: %s\\n'\'' \\\n' "${dep_file}"
+          printf '  && dnf -y install --setopt=install_weak_deps=False \\\n'
           awk '
             {
               sub(/[[:space:]]*#.*/, "")
@@ -84,6 +93,7 @@ generate_runtime_dockerfile() {
 generate_runtime_dockerfile
 
 runtime_build_args=(
+  --layers
   -t codex
   -f "${GENERATED_DOCKERFILE}"
 )
@@ -93,5 +103,5 @@ runtime_build_args+=(
   --volume "${DNF_CACHE_DIR}/libdnf5:/var/cache/libdnf5:Z,rw"
 )
 
-"${CONTAINER_CLI}" build "${runtime_build_args[@]}" .
-"${CONTAINER_CLI}" build -t codex-firewall -f "./Dockerfile.firewall" .
+"${BUILD_COMMAND[@]}" "${runtime_build_args[@]}" .
+"${BUILD_COMMAND[@]}" --layers -t codex-firewall -f "./Dockerfile.firewall" .
