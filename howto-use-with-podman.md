@@ -69,9 +69,9 @@ approval defaults unless the command line already sets them. The image also
 installs a shell profile hook that changes interactive shells into
 the preserved `/app<host-path>` mount, so Codex sees a stable absolute path.
 
-The launcher parses only `--wd` as its own dash option. Other dash arguments are
-passed to Codex, so `--help` still means Codex CLI help. Use the non-dash
-`help` command for launcher help:
+The launcher parses `--wd` and `--id` as its own dash options. Other dash
+arguments are passed to Codex, so `--help` still means Codex CLI help. Use the
+non-dash `help` command for launcher help:
 
 ```bash
 ./run-in-container.sh help
@@ -81,23 +81,40 @@ passed to Codex, so `--help` still means Codex CLI help. Use the non-dash
 Launcher commands are selected by the first recognized non-dash argument:
 
 ```bash
+./run-in-container.sh list
+./run-in-container.sh --id 1 status
+./run-in-container.sh name parent-leaf
 ./run-in-container.sh --wd /path/to/repo spawn
-./run-in-container.sh --wd /path/to/repo enter
-./run-in-container.sh --wd /path/to/repo shell pwd
-./run-in-container.sh --wd /path/to/repo copy ./local.txt notes/local.txt
-./run-in-container.sh --wd /path/to/repo pull notes/out.txt ./out.txt
-./run-in-container.sh --wd /path/to/repo replace --model gpt-5
-./run-in-container.sh --wd /path/to/repo kill
+./run-in-container.sh --id 1 enter
+./run-in-container.sh --id parent-leaf shell pwd
+./run-in-container.sh --id 1 fwenter
+./run-in-container.sh --id parent-leaf fwshell firewall-list
+./run-in-container.sh --id 1 copy ./local.txt notes/local.txt
+./run-in-container.sh --id parent-leaf pull notes/out.txt ./out.txt
+./run-in-container.sh --id 1 replace --model gpt-5
+./run-in-container.sh rm parent-leaf
 ```
 
 `spawn` starts the workspace pod in the background and exits. `enter` runs an
 interactive TTY command in the preserved `/app<host-path>` mount, defaulting to
 `bash`.
 `shell` keeps stdin open but does not allocate a TTY, so `shell pwd` prints
-that absolute path. `copy`/`push` copy host paths into the container;
+that absolute path. `fwenter` and `fwshell` do the same TTY and non-TTY
+operations in the firewall container; `fwenter` defaults to `bash` and
+`fwshell` requires a command. `copy`/`push` copy host paths into the container;
 `pull`/`fetch` copy container paths out. Relative container copy paths resolve
 under the same preserved mount; local copy paths such as `./file` are resolved
 to absolute host paths before calling `podman cp`.
+
+`list` shows registered workspaces by stable runtime sequence number, slug alias,
+state, start time, and path. `--id` can select a workspace by that sequence
+number, by its `parent-leaf` alias, by a known container/pod name, or by an
+absolute path. If an alias matches more than one workspace, use the numeric id.
+For launcher-owned commands that do not otherwise accept payload arguments,
+the id can also come after the command, as in `status 1` or `rm parent-leaf`.
+The registry lives under
+`${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/workspaces` and is made
+from symlinks into per-workspace state directories.
 
 If a workspace container is already running and you start the launcher without
 an explicit launcher command, it offers to enter the existing container, replace
@@ -112,7 +129,7 @@ For a short command available outside this repo, symlink the launcher:
 
 ```bash
 ln -sr ./run-in-container.sh /tmp/codex.sh
-/tmp/codex.sh --wd /path/to/repo enter
+/tmp/codex.sh --id 1 enter
 ```
 
 There is also a `podman kube play` path:
