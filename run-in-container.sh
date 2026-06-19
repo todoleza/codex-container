@@ -1147,9 +1147,13 @@ case "${ACTION}" in
   start)
     if app_running; then
       ensure_workspace_record "${WORK_DIR}"
-      prompt_existing_container
-      if [ "${ACTION}" = "replace" ]; then
-        cleanup_resources immediate
+      if [ "${#START_ARGS[@]}" -eq 0 ]; then
+        prompt_existing_container
+        if [ "${ACTION}" = "replace" ]; then
+          cleanup_resources immediate
+        fi
+      else
+        run_codex_in_app
       fi
     fi
     ;;
