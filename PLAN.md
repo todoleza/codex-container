@@ -87,6 +87,20 @@ The wrapper programs the firewall with `podman exec`:
 
 Only after those steps succeed does it start the Codex container.
 
+### Launcher defaults and stability
+
+`run-in-container.sh` can load optional dotenv-style env files before applying
+its built-in defaults. The default global file is
+`$HOME/.local/share/codex-container/env`, the default workspace file is
+`$WORK_DIR/.codex-container.env`, and `CODEX_CONTAINER_ENV_FILES` can name
+additional colon-separated files. Later env files override earlier env files,
+but caller-provided environment variables stay strongest.
+
+For long-lived or mutating commands, the launcher re-execs through a runtime
+snapshot under `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container` so edits
+to the source script after invocation do not affect that active command.
+Short read-only commands (`help`, `list`, `name`, `status`) do not snapshot.
+
 ### Distribution shapes
 
 Two user-facing entrypoints are prepared:

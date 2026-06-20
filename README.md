@@ -42,6 +42,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - starts interactive shells in the mounted workspace via an image profile hook
   - builds the firewall allowlist from named domain categories, with explicitly omitted preset domains kept out by default
   - exposes the current firewall policy read-only inside the app container through `codex-firewall-policy`
+  - loads launcher defaults from global, workspace, and explicit env files without overriding caller-provided environment
+  - re-execs long-lived or mutating invocations from a runtime snapshot so later edits to the launcher do not affect the active command
   - can start an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - provides launcher commands for list/status/name, app and firewall exec, copy/pull, replace, and destroy

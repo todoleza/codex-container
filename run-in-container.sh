@@ -2,6 +2,103 @@
 set -euo pipefail
 
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
+
+CALLER_ENV_NAMES="$(env | sed 's/=.*//')"
+LOADED_ENV_FILES=()
+SKIPPED_ENV_FILES=()
+
+caller_env_has() {
+  local name="$1"
+  grep -Fxq -- "${name}" <<< "${CALLER_ENV_NAMES}"
+}
+
+set_from_env_file() {
+  local name="$1"
+  local value="$2"
+
+  if caller_env_has "${name}"; then
+    return 0
+  fi
+
+  printf -v "${name}" '%s' "${value}"
+}
+
+load_env_file() {
+  local file="$1"
+  local line_number=0
+  local line
+  local name
+  local value
+
+  if [ -z "${file}" ]; then
+    return 0
+  fi
+
+  if [ ! -f "${file}" ]; then
+    SKIPPED_ENV_FILES+=("${file}")
+    return 0
+  fi
+
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line_number=$((line_number + 1))
+    line="${line%$'\r'}"
+    case "${line}" in
+      ""|\#*) continue ;;
+    esac
+
+    if [[ "${line}" != *=* ]]; then
+      echo "Invalid env file line ${file}:${line_number}: ${line}" >&2
+      exit 1
+    fi
+
+    name="${line%%=*}"
+    value="${line#*=}"
+    if ! [[ "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Invalid env file variable ${file}:${line_number}: ${name}" >&2
+      exit 1
+    fi
+
+    set_from_env_file "${name}" "${value}"
+  done < "${file}"
+
+  LOADED_ENV_FILES+=("${file}")
+}
+
+detect_requested_work_dir() {
+  local args=("$@")
+  local idx=0
+
+  while [ "${idx}" -lt "${#args[@]}" ]; do
+    case "${args[$idx]}" in
+      --wd)
+        if [ -n "${args[$((idx + 1))]:-}" ]; then
+          printf '%s\n' "${args[$((idx + 1))]}"
+          return
+        fi
+        ;;
+      --)
+        break
+        ;;
+    esac
+    idx=$((idx + 1))
+  done
+
+  printf '%s\n' "${WORK_DIR}"
+}
+
+EARLY_WORK_DIR="$(realpath -m "$(detect_requested_work_dir "$@")")"
+: "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
+: "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
+
+load_env_file "${CODEX_CONTAINER_GLOBAL_ENV_FILE}"
+load_env_file "${CODEX_CONTAINER_WORKSPACE_ENV_FILE}"
+if [ -n "${CODEX_CONTAINER_ENV_FILES:-}" ]; then
+  IFS=: read -r -a CODEX_CONTAINER_ENV_FILE_ARRAY <<< "${CODEX_CONTAINER_ENV_FILES}"
+  for env_file in "${CODEX_CONTAINER_ENV_FILE_ARRAY[@]}"; do
+    load_env_file "${env_file}"
+  done
+fi
+
 : "${CODEX_ALLOWED_DOMAIN_CATEGORIES:=openai source_control os_packages containers language_packages jvm_dotnet schema_docs}"
 : "${CODEX_ALLOWED_DOMAINS_OPENAI:=api.openai.com auth.openai.com chatgpt.com}"
 : "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL:=github.com githubusercontent.com api.github.com gitlab.com bitbucket.org}"
@@ -879,6 +976,15 @@ print_startup_summary() {
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
   echo "timezone: ${HOST_TZ}"
+  if [ "${#LOADED_ENV_FILES[@]}" -gt 0 ]; then
+    echo "loaded env files: ${LOADED_ENV_FILES[*]}"
+  fi
+  if [ "${#SKIPPED_ENV_FILES[@]}" -gt 0 ]; then
+    echo "missing env files: ${SKIPPED_ENV_FILES[*]}"
+  fi
+  if [ -n "${CODEX_CONTAINER_LAUNCHER_SNAPSHOT_PATH:-}" ]; then
+    echo "launcher snapshot: ${CODEX_CONTAINER_LAUNCHER_SNAPSHOT_PATH}"
+  fi
   echo "firewall policy dir: ${FIREWALL_POLICY_RUNTIME_DIR_HOST} -> ${CODEX_FIREWALL_POLICY_DIR}"
   echo "allowed domain categories: ${CODEX_ALLOWED_DOMAIN_CATEGORIES}"
   echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
@@ -918,6 +1024,40 @@ print_startup_summary() {
   else
     echo "container exec default: codex"
   fi
+}
+
+action_should_snapshot() {
+  case "${ACTION}" in
+    help|list|name|status) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+snapshot_reexec_if_needed() {
+  local snapshot_dir
+  local source_path
+  local source_hash
+  local snapshot_path
+
+  if [ "${CODEX_CONTAINER_LAUNCHER_SNAPSHOT:-0}" = "1" ]; then
+    return 0
+  fi
+
+  action_should_snapshot || return 0
+
+  snapshot_dir="${RUNTIME_BASE_DIR}/codex-container/launcher-snapshots"
+  mkdir -p "${snapshot_dir}"
+
+  source_path="$(readlink -f "$0")"
+  source_hash="$(sha256sum "${source_path}" | cut -c1-12)"
+  snapshot_path="${snapshot_dir}/$(basename "${source_path}")-${source_hash}-$$"
+
+  cp "${source_path}" "${snapshot_path}"
+  chmod 700 "${snapshot_path}"
+
+  export CODEX_CONTAINER_LAUNCHER_SNAPSHOT=1
+  export CODEX_CONTAINER_LAUNCHER_SNAPSHOT_PATH="${snapshot_path}"
+  exec "${snapshot_path}" "$@"
 }
 
 start_proxy_container() {
@@ -1073,6 +1213,8 @@ if ! command -v podman >/dev/null 2>&1; then
   echo "Error: podman is not installed." >&2
   exit 1
 fi
+
+snapshot_reexec_if_needed "$@"
 
 if [ "${ACTION}" = "list" ]; then
   list_workspaces

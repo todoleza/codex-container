@@ -64,6 +64,8 @@ The launcher:
 - propagates the workstation timezone into both containers via `TZ`, falling back to `UTC` if detection fails
 - propagates `CODEX_WORKDIR`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_DANGEROUS_BYPASS` into the app container
 - mounts the live firewall policy into the app container read-only and exposes it through `codex-firewall-policy`
+- loads optional env files before applying launcher defaults
+- snapshots the launcher into the runtime directory for long-lived or mutating commands
 - prints a short startup summary including the current Codex sandbox/approval policy and domain allowlist
 
 The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
@@ -162,6 +164,9 @@ PROXY_UPSTREAM_HOST=localhost
 PROXY_UPSTREAM_PORT=1080
 CODEX_FIREWALL_POLICY_DIR=/run/codex-firewall-policy
 FIREWALL_POLICY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-policy
+CODEX_CONTAINER_GLOBAL_ENV_FILE=$HOME/.local/share/codex-container/env
+CODEX_CONTAINER_WORKSPACE_ENV_FILE=/path/to/repo/.codex-container.env
+CODEX_CONTAINER_ENV_FILES=""
 CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=on-request
 CODEX_DANGEROUS_BYPASS=0
@@ -186,6 +191,28 @@ EXTRA_ALLOWED_DOMAINS="deb.debian.org"
 EXTRA_ALLOWED_IPV4="1.1.1.1 8.8.8.0/24"
 EXTRA_ALLOWED_IPV6="2606:4700:4700::1111 2001:4860:4860::/48"
 ```
+
+Env files are optional dotenv-style files with `KEY=VALUE` lines, blank lines,
+and `#` comments. They are data files, not shell scripts; command substitution,
+variable expansion, and `export KEY=VALUE` syntax are not evaluated. Invalid
+lines stop startup with a clear error.
+
+The load order is:
+
+1. `${CODEX_CONTAINER_GLOBAL_ENV_FILE:-$HOME/.local/share/codex-container/env}`
+2. `${CODEX_CONTAINER_WORKSPACE_ENV_FILE:-$WORK_DIR/.codex-container.env}`
+3. each colon-separated path in `CODEX_CONTAINER_ENV_FILES`
+
+Later env files override earlier env files. Variables already present in the
+caller environment override all env files, so one-off invocations such as
+`PROXY_ENABLE=1 codex.sh ...` remain strongest.
+
+For long-lived or mutating commands, the launcher copies itself to
+`${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/launcher-snapshots` and
+re-execs the copy once. This protects active `start`, `spawn`, `replace`,
+`enter`, `shell`, `fwenter`, `fwshell`, copy/pull, and remove operations from
+subsequent edits to the source launcher. Short read-only commands `help`,
+`list`, `name`, and `status` run directly.
 
 `CODEX_ALLOWED_DOMAIN_CATEGORIES` composes the default firewall domain
 allowlist from named groups. Remove whole categories for narrower environments,
