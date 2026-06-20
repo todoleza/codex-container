@@ -127,6 +127,9 @@ fi
 : "${CODEX_SANDBOX_MODE:=danger-full-access}"
 : "${CODEX_APPROVAL_POLICY:=on-request}"
 : "${CODEX_DANGEROUS_BYPASS:=0}"
+: "${CODEX_RELEASE_API_URL:=https://api.github.com/repos/openai/codex/releases/latest}"
+: "${CODEX_RELEASE_API_TIMEOUT_SECONDS:=5}"
+: "${CODEX_RELEASE_CHECK_ON_SPAWN:=1}"
 : "${PODMAN_POD_CREATE_ARGS:=}"
 : "${PODMAN_FIREWALL_RUN_ARGS:=}"
 : "${PODMAN_CODEX_RUN_ARGS:=}"
@@ -208,6 +211,12 @@ WORK_DIR_SELECTED=0
 WORKSPACE_ALIAS=""
 WORKSPACE_SEQ=""
 REGISTRY_ROOT=""
+WORKSPACE_STATE_DIR=""
+CODEX_LOCAL_VERSION=""
+CODEX_LATEST_VERSION=""
+CODEX_VERSION_LABEL_ARGS_ARRAY=()
+CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY=()
+CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY=()
 
 collect_codex_app_env_args() {
   local source_name
@@ -245,6 +254,130 @@ refresh_runtime_arrays() {
 }
 
 refresh_runtime_arrays
+
+parse_first_json_string_field() {
+  local key="$1"
+  local value=""
+
+  value=$(grep -o "\"${key}\":[[:space:]]*\"[^\"]*\"" | head -1 | sed "s/\"${key}\":[[:space:]]*\"//; s/\"$//")
+  printf '%s\n' "${value}"
+}
+
+normalize_codex_release_version() {
+  local version="$1"
+
+  version="${version#rust-v}"
+  version="${version#v}"
+  printf '%s\n' "${version}"
+}
+
+parse_codex_version_from_text() {
+  sed -n 's/.*\([0-9][0-9.]*[0-9]\).*/\1/p' | head -1
+}
+
+detect_image_label_codex_version() {
+  local version=""
+
+  version=$(
+    podman image inspect \
+      --format '{{ index .Config.Labels "codex.cli.version" }}' \
+      "${CONTAINER_IMAGE}" 2>/dev/null || true
+  )
+
+  if [ -n "${version}" ] && [ "${version}" != "<no value>" ]; then
+    CODEX_LOCAL_VERSION="${version}"
+  fi
+}
+
+probe_image_codex_version() {
+  local output=""
+  local version=""
+
+  output=$(
+    podman run --rm \
+      --entrypoint codex \
+      "${CONTAINER_IMAGE}" \
+      --version 2>/dev/null || true
+  )
+
+  if [ -z "${output}" ]; then
+    return 0
+  fi
+
+  version=$(printf '%s\n' "${output}" | parse_codex_version_from_text || true)
+  if [ -n "${version}" ]; then
+    CODEX_LOCAL_VERSION="${version}"
+  fi
+}
+
+fetch_latest_codex_version() {
+  local response=""
+  local tag=""
+
+  if [ "${CODEX_RELEASE_CHECK_ON_SPAWN}" != "1" ]; then
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  response=$(
+    curl -fsSL \
+      --max-time "${CODEX_RELEASE_API_TIMEOUT_SECONDS}" \
+      -H 'Accept: application/vnd.github+json' \
+      "${CODEX_RELEASE_API_URL}" 2>/dev/null || true
+  )
+
+  if [ -z "${response}" ]; then
+    return 0
+  fi
+
+  tag=$(printf '%s' "${response}" | parse_first_json_string_field tag_name || true)
+  if [ -z "${tag}" ]; then
+    return 0
+  fi
+
+  CODEX_LATEST_VERSION="$(normalize_codex_release_version "${tag}")"
+}
+
+refresh_codex_version_labels() {
+  CODEX_VERSION_LABEL_ARGS_ARRAY=()
+  CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY=()
+  CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY=()
+
+  if [ -n "${CODEX_LOCAL_VERSION}" ]; then
+    CODEX_VERSION_LABEL_ARGS_ARRAY+=(--label "codex.cli.version=${CODEX_LOCAL_VERSION}")
+    CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "org.opencontainers.image.version=${CODEX_LOCAL_VERSION}")
+    CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/version=${CODEX_LOCAL_VERSION}")
+    CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY+=(--label "org.opencontainers.image.version=${CODEX_LOCAL_VERSION}")
+    CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/version=${CODEX_LOCAL_VERSION}")
+  fi
+
+  if [ -n "${CODEX_LATEST_VERSION}" ]; then
+    CODEX_VERSION_LABEL_ARGS_ARRAY+=(--label "codex.cli.latest=${CODEX_LATEST_VERSION}")
+  fi
+
+  CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "org.opencontainers.image.title=codex-container-runtime")
+  CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/name=codex")
+  CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/part-of=codex-container")
+  CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/component=app")
+  CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/name=codex")
+  CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/part-of=codex-container")
+  CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY+=(--label "app.kubernetes.io/component=pod")
+}
+
+write_optional_state_file() {
+  local state_dir="$1"
+  local name="$2"
+  local value="$3"
+
+  if [ -n "${value}" ]; then
+    write_state_file "${state_dir}" "${name}" "${value}"
+  else
+    rm -f "${state_dir}/${name}" >/dev/null 2>&1 || true
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -372,6 +505,11 @@ validate_port() {
 
   [[ "${port}" =~ ^[0-9]+$ ]] || return 1
   (( port >= 1 && port <= 65535 ))
+}
+
+validate_non_negative_integer() {
+  local value="$1"
+  [[ "${value}" =~ ^[0-9]+$ ]]
 }
 
 validate_sandbox_mode() {
@@ -618,12 +756,15 @@ ensure_workspace_record() {
   write_state_file "${state_dir}" app "${CONTAINER_NAME}"
   write_state_file "${state_dir}" fw "${FW_NAME}"
   write_state_file "${state_dir}" proxy "${PROXY_NAME}"
+  write_optional_state_file "${state_dir}" codex_cli_version "${CODEX_LOCAL_VERSION}"
+  write_optional_state_file "${state_dir}" codex_cli_latest "${CODEX_LATEST_VERSION}"
   if [ ! -f "${state_dir}/created_epoch" ]; then
     write_state_file "${state_dir}" created_epoch "$(date +%s)"
   fi
 
   WORKSPACE_ALIAS="${alias}"
   WORKSPACE_SEQ="${seq}"
+  WORKSPACE_STATE_DIR="${state_dir}"
 }
 
 resolve_state_by_alias() {
@@ -1023,6 +1164,12 @@ print_startup_summary() {
   echo "runtime image: ${CONTAINER_IMAGE}"
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
+  if [ -n "${CODEX_LOCAL_VERSION}" ]; then
+    echo "codex cli version: ${CODEX_LOCAL_VERSION}"
+  fi
+  if [ -n "${CODEX_LATEST_VERSION}" ]; then
+    echo "codex cli latest: ${CODEX_LATEST_VERSION}"
+  fi
   echo "timezone: ${HOST_TZ}"
   if [ "${#LOADED_ENV_FILES[@]}" -gt 0 ]; then
     echo "loaded env files: ${LOADED_ENV_FILES[*]}"
@@ -1072,6 +1219,17 @@ print_startup_summary() {
   else
     echo "container exec default: codex"
   fi
+}
+
+prepare_codex_version_metadata() {
+  CODEX_LOCAL_VERSION=""
+  CODEX_LATEST_VERSION=""
+  detect_image_label_codex_version
+  if [ -z "${CODEX_LOCAL_VERSION}" ]; then
+    probe_image_codex_version
+  fi
+  fetch_latest_codex_version
+  refresh_codex_version_labels
 }
 
 action_should_snapshot() {
@@ -1181,6 +1339,8 @@ start_new_pod() {
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
     --label "codex.workspace.role=pod" \
+    "${CODEX_VERSION_LABEL_ARGS_ARRAY[@]}" \
+    "${CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
     "${PODMAN_POD_CREATE_ARGS_ARRAY[@]}"
 
   podman run --name "$FW_NAME" -d \
@@ -1226,6 +1386,8 @@ start_new_pod() {
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
     --label "codex.workspace.role=app" \
+    "${CODEX_VERSION_LABEL_ARGS_ARRAY[@]}" \
+    "${CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
     -e OPENAI_API_KEY \
     -e TZ="${HOST_TZ}" \
     -e CODEX_WORKDIR="/app${WORK_DIR}" \
@@ -1319,6 +1481,11 @@ if [[ "${PROXY_ENABLE}" != "0" && "${PROXY_ENABLE}" != "1" ]]; then
   exit 1
 fi
 
+if [[ "${CODEX_RELEASE_CHECK_ON_SPAWN}" != "0" && "${CODEX_RELEASE_CHECK_ON_SPAWN}" != "1" ]]; then
+  echo "Error: CODEX_RELEASE_CHECK_ON_SPAWN must be 0 or 1." >&2
+  exit 1
+fi
+
 if ! validate_sandbox_mode "${CODEX_SANDBOX_MODE}"; then
   echo "Error: Invalid CODEX_SANDBOX_MODE: ${CODEX_SANDBOX_MODE}" >&2
   exit 1
@@ -1336,6 +1503,11 @@ fi
 
 if ! validate_port "${PROXY_UPSTREAM_PORT}"; then
   echo "Error: Invalid PROXY_UPSTREAM_PORT: ${PROXY_UPSTREAM_PORT}" >&2
+  exit 1
+fi
+
+if ! validate_non_negative_integer "${CODEX_RELEASE_API_TIMEOUT_SECONDS}"; then
+  echo "Error: Invalid CODEX_RELEASE_API_TIMEOUT_SECONDS: ${CODEX_RELEASE_API_TIMEOUT_SECONDS}" >&2
   exit 1
 fi
 
@@ -1391,6 +1563,7 @@ case "${ACTION}" in
       echo "already running: ${CONTAINER_NAME}"
       exit 0
     fi
+    prepare_codex_version_metadata
     print_startup_summary
     hold_startup_summary
     start_new_pod
@@ -1459,6 +1632,7 @@ case "${ACTION}" in
     ;;
 esac
 
+prepare_codex_version_metadata
 print_startup_summary
 hold_startup_summary
 start_new_pod

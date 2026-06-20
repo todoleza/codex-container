@@ -66,6 +66,7 @@ The launcher:
 - mounts the live firewall policy into the app container read-only and exposes it through `codex-firewall-policy`
 - loads optional env files before applying launcher defaults
 - snapshots the launcher into the runtime directory for long-lived or mutating commands
+- labels new pods and app containers with `codex.cli.version` from runtime-image metadata and `codex.cli.latest` from the GitHub releases API
 - prints a short startup summary including the current Codex sandbox/approval policy and domain allowlist
 
 The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
@@ -170,6 +171,9 @@ CODEX_CONTAINER_ENV_FILES=""
 CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=on-request
 CODEX_DANGEROUS_BYPASS=0
+CODEX_RELEASE_API_URL=https://api.github.com/repos/openai/codex/releases/latest
+CODEX_RELEASE_API_TIMEOUT_SECONDS=5
+CODEX_RELEASE_CHECK_ON_SPAWN=1
 PODMAN_POD_CREATE_ARGS=""
 PODMAN_FIREWALL_RUN_ARGS=""
 PODMAN_CODEX_RUN_ARGS=""
@@ -238,6 +242,34 @@ or override an individual `CODEX_ALLOWED_DOMAINS_*` variable when a group needs
 local tuning. `OPENAI_ALLOWED_DOMAINS` remains a full manual override; if it is
 set, category composition is skipped. `EXTRA_ALLOWED_DOMAINS` appends local
 one-off domains after category composition.
+
+`build-images.sh` extracts the staged Codex package version from
+`dist/codex.tgz` and saves it onto the runtime image as `codex.cli.version` and
+`org.opencontainers.image.version`. When a new pod is created, the launcher
+reads `codex.cli.version` from the runtime image, falls back to a one-shot
+`podman run --rm --entrypoint codex <image> --version` probe if needed, queries
+`${CODEX_RELEASE_API_URL}` with `curl`, and labels the pod and app container
+with:
+
+```text
+codex.cli.version=<staged version>
+codex.cli.latest=<latest release version>
+```
+
+The GitHub lookup is best-effort. If `curl` is missing, the request times out,
+or the API is unavailable, startup continues and only the local image version
+label is set. The resolved `codex.cli.version` and `codex.cli.latest` values
+are also written into the workspace state directory under
+`${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/workspaces/state/<hash>/`.
+Disable the lookup with `CODEX_RELEASE_CHECK_ON_SPAWN=0`.
+
+The runtime image also carries OCI-style labels including
+`org.opencontainers.image.title`, `org.opencontainers.image.description`,
+`org.opencontainers.image.ref.name`, and `org.opencontainers.image.version`.
+Spawned pods and app containers mirror the resolved version as
+`org.opencontainers.image.version` and include
+`app.kubernetes.io/name`, `app.kubernetes.io/part-of`,
+`app.kubernetes.io/component`, and `app.kubernetes.io/version`.
 
 `CODEX_ALLOWED_DOMAINS_VENDOR_OPT_IN` is intentionally not included in the
 default categories because those domains are broad vendor or third-party

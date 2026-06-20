@@ -6,6 +6,7 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 CONTAINER_CLI="${CONTAINER_CLI:-buildah}"
 DNF_CACHE_DIR="${DNF_CACHE_DIR:-${SCRIPT_DIR}/.build-cache/dnf-fedora-44}"
 GENERATED_DOCKERFILE="${SCRIPT_DIR}/.build-cache/Dockerfile.runtime"
+CODEX_PACKAGE_VERSION=""
 trap "popd >> /dev/null" EXIT
 pushd "$SCRIPT_DIR" >> /dev/null || {
   echo "Error: Failed to change directory to $SCRIPT_DIR"
@@ -92,10 +93,25 @@ generate_runtime_dockerfile() {
 
 generate_runtime_dockerfile
 
+CODEX_PACKAGE_VERSION="$(tar -xOf ./dist/codex.tgz package/package.json 2>/dev/null | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+if [ -z "${CODEX_PACKAGE_VERSION}" ]; then
+  echo "Error: failed to extract Codex package version from ./dist/codex.tgz." >&2
+  exit 1
+fi
+
 runtime_build_args=(
   --layers
   -t codex
   -f "${GENERATED_DOCKERFILE}"
+  --label "org.opencontainers.image.title=codex-container-runtime"
+  --label "org.opencontainers.image.description=Fedora-based Codex runtime image for codex-container"
+  --label "codex.cli.version=${CODEX_PACKAGE_VERSION}"
+  --label "org.opencontainers.image.ref.name=codex"
+  --label "org.opencontainers.image.version=${CODEX_PACKAGE_VERSION}"
+  --label "app.kubernetes.io/name=codex"
+  --label "app.kubernetes.io/part-of=codex-container"
+  --label "app.kubernetes.io/component=app"
+  --label "app.kubernetes.io/version=${CODEX_PACKAGE_VERSION}"
 )
 
 runtime_build_args+=(
@@ -104,4 +120,14 @@ runtime_build_args+=(
 )
 
 "${BUILD_COMMAND[@]}" "${runtime_build_args[@]}" .
-"${BUILD_COMMAND[@]}" --layers -t codex-firewall -f "./Dockerfile.firewall" .
+"${BUILD_COMMAND[@]}" \
+  --layers \
+  -t codex-firewall \
+  -f "./Dockerfile.firewall" \
+  --label "org.opencontainers.image.title=codex-container-firewall" \
+  --label "org.opencontainers.image.description=Alpine firewall sidecar image for codex-container" \
+  --label "org.opencontainers.image.ref.name=codex-firewall" \
+  --label "app.kubernetes.io/name=codex-firewall" \
+  --label "app.kubernetes.io/part-of=codex-container" \
+  --label "app.kubernetes.io/component=firewall" \
+  .
