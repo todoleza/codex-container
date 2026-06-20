@@ -2,14 +2,24 @@
 set -euo pipefail
 
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-: "${OPENAI_ALLOWED_DOMAINS:=api.openai.com auth.openai.com chatgpt.com api.github.com}"
+: "${CODEX_ALLOWED_DOMAIN_CATEGORIES:=openai source_control os_packages containers language_packages jvm_dotnet schema_docs}"
+: "${CODEX_ALLOWED_DOMAINS_OPENAI:=api.openai.com auth.openai.com chatgpt.com}"
+: "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL:=github.com githubusercontent.com api.github.com gitlab.com bitbucket.org}"
+: "${CODEX_ALLOWED_DOMAINS_OS_PACKAGES:=alpinelinux.org archlinux.org centos.org debian.org fedoraproject.org ppa.launchpad.net ubuntu.com packages.microsoft.com}"
+: "${CODEX_ALLOWED_DOMAINS_CONTAINERS:=docker.com docker.io ghcr.io gcr.io mcr.microsoft.com quay.io}"
+: "${CODEX_ALLOWED_DOMAINS_LANGUAGE_PACKAGES:=cpan.org crates.io golang.org goproxy.io haskell.org hex.pm metacpan.org nodejs.org npmjs.com npmjs.org packagist.org pkg.go.dev pub.dev pypa.io pypi.org pypi.python.org pythonhosted.org ruby-lang.org rubygems.org rubyonrails.org rustup.rs yarnpkg.com}"
+: "${CODEX_ALLOWED_DOMAINS_JVM_DOTNET:=apt.llvm.org dot.net dotnet.microsoft.com gradle.org maven.org nuget.org}"
+: "${CODEX_ALLOWED_DOMAINS_SCHEMA_DOCS:=json-schema.org json.schemastore.org}"
+: "${CODEX_ALLOWED_DOMAINS_VENDOR_OPT_IN:=anaconda.com apache.org azure.com cocoapods.org eclipse.org google.com hashicorp.com java.com java.net k8s.io launchpad.net microsoft.com oracle.com packagecloud.io sourceforge.net spring.io swift.org visualstudio.com}"
+: "${CODEX_OMITTED_DOMAINS:=bower.io continuum.io jcenter.bintray.com rubyforge.org rvm.io}"
+: "${OPENAI_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
 : "${CONTAINER_IMAGE:=codex}"
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
 : "${PROXY_CONTAINER_IMAGE:=${FIREWALL_CONTAINER_IMAGE}}"
-: "${PROXY_ENABLE:=1}"
+: "${PROXY_ENABLE:=0}"
 : "${PROXY_RUNTIME_DIR:=/run/codex-proxy}"
 : "${PROXY_SOCKET_PATH:=/run/codex-proxy/proxy.sock}"
 : "${PROXY_LISTEN_HOST:=localhost}"
@@ -26,10 +36,67 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${CONTAINER_EXEC_COMMAND:=}"
 : "${STARTUP_SUMMARY_HOLD_SECONDS:=1.2}"
 
+append_domain_list() {
+  local values="$1"
+  local value
+
+  read -r -a values_array <<< "${values}"
+  for value in "${values_array[@]}"; do
+    [ -n "${value}" ] || continue
+    OPENAI_ALLOWED_DOMAINS+=" ${value}"
+  done
+}
+
+append_domain_category() {
+  local category="$1"
+
+  case "${category}" in
+    openai) append_domain_list "${CODEX_ALLOWED_DOMAINS_OPENAI}" ;;
+    source_control) append_domain_list "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL}" ;;
+    os_packages) append_domain_list "${CODEX_ALLOWED_DOMAINS_OS_PACKAGES}" ;;
+    containers) append_domain_list "${CODEX_ALLOWED_DOMAINS_CONTAINERS}" ;;
+    language_packages) append_domain_list "${CODEX_ALLOWED_DOMAINS_LANGUAGE_PACKAGES}" ;;
+    jvm_dotnet) append_domain_list "${CODEX_ALLOWED_DOMAINS_JVM_DOTNET}" ;;
+    schema_docs) append_domain_list "${CODEX_ALLOWED_DOMAINS_SCHEMA_DOCS}" ;;
+    vendor_opt_in) append_domain_list "${CODEX_ALLOWED_DOMAINS_VENDOR_OPT_IN}" ;;
+    *)
+      echo "Error: Unknown CODEX_ALLOWED_DOMAIN_CATEGORIES entry: ${category}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+domain_is_omitted() {
+  local domain="$1"
+  local omitted
+
+  for omitted in ${CODEX_OMITTED_DOMAINS}; do
+    if [ "${domain}" = "${omitted}" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if [[ -z "${OPENAI_ALLOWED_DOMAINS}" ]]; then
+  read -r -a ALLOWED_CATEGORY_ARRAY <<< "${CODEX_ALLOWED_DOMAIN_CATEGORIES}"
+  for category in "${ALLOWED_CATEGORY_ARRAY[@]}"; do
+    append_domain_category "${category}"
+  done
+fi
+
 if [[ -n "${EXTRA_ALLOWED_DOMAINS}" ]]; then
   OPENAI_ALLOWED_DOMAINS+=" ${EXTRA_ALLOWED_DOMAINS}"
 fi
 
+FINAL_ALLOWED_DOMAINS=()
+for domain in ${OPENAI_ALLOWED_DOMAINS}; do
+  domain_is_omitted "${domain}" && continue
+  FINAL_ALLOWED_DOMAINS+=("${domain}")
+done
+
+OPENAI_ALLOWED_DOMAINS="$(printf '%s\n' "${FINAL_ALLOWED_DOMAINS[@]}" | sort -u | xargs)"
 read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
 read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
 read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
@@ -784,7 +851,9 @@ print_startup_summary() {
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
   echo "timezone: ${HOST_TZ}"
+  echo "allowed domain categories: ${CODEX_ALLOWED_DOMAIN_CATEGORIES}"
   echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
+  echo "omitted preset domains: ${CODEX_OMITTED_DOMAINS}"
   if [ -n "${EXTRA_ALLOWED_IPV4}" ]; then
     echo "extra allowed IPv4: ${EXTRA_ALLOWED_IPV4}"
   fi

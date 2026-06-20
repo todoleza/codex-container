@@ -7,7 +7,9 @@ This repo creates container with Codex CLI in a rootless Podman pod with:
 - a direct Podman launcher
 - an experimental `podman kube play` launcher
 - provides a working security-first container prototype
-- although the pod exposes socks proxy on port 1080, it is a plain forward to existing proxy. **It may be used by the agent for exfiltration of data.**
+- optional SOCKS proxy relay support. The relay is disabled by default because
+  it forwards to an existing host proxy and may be used by the agent for
+  exfiltration of data.
 
 The intended build flow is:
 
@@ -38,7 +40,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - keeps Codex sandbox resources available inside the runtime image
   - defaults Codex itself to `--sandbox danger-full-access` and propagates that policy into the app container
   - starts interactive shells in the mounted workspace via an image profile hook
-  - starts an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
+  - builds the firewall allowlist from named domain categories, with explicitly omitted preset domains kept out by default
+  - can start an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - provides launcher commands for list/status/name, app and firewall exec, copy/pull, replace, and destroy
 - `run-in-podman-kube.sh` - experimental

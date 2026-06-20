@@ -51,7 +51,9 @@ The direct launcher creates a pod with stable human-readable names:
 - app: `codex-<workspace>-<hash>-app`
 
 The proxy container is optional functionality that exposes the host's
-`localhost:1080` in the restricted network namespace of the pod.
+`localhost:1080` in the restricted network namespace of the pod. It is disabled
+by default because it changes the network boundary from domain-filtered direct
+egress to whatever the host-side proxy permits.
 
 The launcher:
 
@@ -149,7 +151,7 @@ Optional environment variables:
 CONTAINER_IMAGE=codex
 FIREWALL_CONTAINER_IMAGE=codex-firewall
 PROXY_CONTAINER_IMAGE=codex-firewall
-PROXY_ENABLE=1
+PROXY_ENABLE=0
 PROXY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-proxy
 PROXY_RUNTIME_DIR=/run/codex-proxy
 PROXY_SOCKET_PATH=/run/codex-proxy/proxy.sock
@@ -166,18 +168,44 @@ PODMAN_CODEX_RUN_ARGS=""
 PODMAN_EXEC_ARGS=""
 CONTAINER_EXEC_COMMAND=""
 STARTUP_SUMMARY_HOLD_SECONDS=2
-OPENAI_ALLOWED_DOMAINS="api.openai.com auth.openai.com chatgpt.com api.github.com"
+CODEX_ALLOWED_DOMAIN_CATEGORIES="openai source_control os_packages containers language_packages jvm_dotnet schema_docs"
+CODEX_ALLOWED_DOMAINS_OPENAI="api.openai.com auth.openai.com chatgpt.com"
+CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL="github.com githubusercontent.com api.github.com gitlab.com bitbucket.org"
+CODEX_ALLOWED_DOMAINS_OS_PACKAGES="alpinelinux.org archlinux.org centos.org debian.org fedoraproject.org ppa.launchpad.net ubuntu.com packages.microsoft.com"
+CODEX_ALLOWED_DOMAINS_CONTAINERS="docker.com docker.io ghcr.io gcr.io mcr.microsoft.com quay.io"
+CODEX_ALLOWED_DOMAINS_LANGUAGE_PACKAGES="cpan.org crates.io golang.org goproxy.io haskell.org hex.pm metacpan.org nodejs.org npmjs.com npmjs.org packagist.org pkg.go.dev pub.dev pypa.io pypi.org pypi.python.org pythonhosted.org ruby-lang.org rubygems.org rubyonrails.org rustup.rs yarnpkg.com"
+CODEX_ALLOWED_DOMAINS_JVM_DOTNET="apt.llvm.org dot.net dotnet.microsoft.com gradle.org maven.org nuget.org"
+CODEX_ALLOWED_DOMAINS_SCHEMA_DOCS="json-schema.org json.schemastore.org"
+CODEX_ALLOWED_DOMAINS_VENDOR_OPT_IN="anaconda.com apache.org azure.com cocoapods.org eclipse.org google.com hashicorp.com java.com java.net k8s.io launchpad.net microsoft.com oracle.com packagecloud.io sourceforge.net spring.io swift.org visualstudio.com"
+CODEX_OMITTED_DOMAINS="bower.io continuum.io jcenter.bintray.com rubyforge.org rvm.io"
+OPENAI_ALLOWED_DOMAINS=""
 EXTRA_ALLOWED_DOMAINS="deb.debian.org"
 EXTRA_ALLOWED_IPV4="1.1.1.1 8.8.8.0/24"
 EXTRA_ALLOWED_IPV6="2606:4700:4700::1111 2001:4860:4860::/48"
 ```
+
+`CODEX_ALLOWED_DOMAIN_CATEGORIES` composes the default firewall domain
+allowlist from named groups. Remove whole categories for narrower environments,
+or override an individual `CODEX_ALLOWED_DOMAINS_*` variable when a group needs
+local tuning. `OPENAI_ALLOWED_DOMAINS` remains a full manual override; if it is
+set, category composition is skipped. `EXTRA_ALLOWED_DOMAINS` appends local
+one-off domains after category composition.
+
+`CODEX_ALLOWED_DOMAINS_VENDOR_OPT_IN` is intentionally not included in the
+default categories because those domains are broad vendor or third-party
+download surfaces. `CODEX_OMITTED_DOMAINS` records legacy preset domains that
+are deliberately not allowed by default.
 
 The proxy path is split in two:
 
 - the firewall sidecar listens on `localhost:1080` inside the pod and forwards to a Unix socket under `/run/codex-proxy`
 - a dedicated `proxy` container mounts the matching host path at `/run/user/<uid>/codex-<workspace>-<hash>-proxy/proxy.sock` and relays it to `localhost:1080` on the host by default
 
-Set `PROXY_ENABLE=0` to skip it entirely, or override `PROXY_UPSTREAM_HOST` / `PROXY_UPSTREAM_PORT` if your host-side SOCKS service lives somewhere else.
+Set `PROXY_ENABLE=1` to opt into the relay, or override
+`PROXY_UPSTREAM_HOST` / `PROXY_UPSTREAM_PORT` if your host-side SOCKS service
+lives somewhere else. The direct firewall path resolves allowed domains to IPs
+and permits only those destinations. The proxy path permits the local proxy hop,
+then the host-side SOCKS service decides the real destination policy.
 
 The primary launcher defaults to:
 

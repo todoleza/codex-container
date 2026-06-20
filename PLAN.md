@@ -45,6 +45,23 @@ Traffic policy:
 
 IPv6 is filtered when present. Missing host IPv6 connectivity is acceptable; unfiltered IPv6 egress is not.
 
+### Agent internet access policy
+
+`run-in-container.sh` composes the default domain allowlist from named
+categories instead of a single flat string. The categories mirror common Codex
+agent dependency access needs while keeping broad vendor and legacy endpoints
+separate:
+
+- default categories: `openai`, `source_control`, `os_packages`, `containers`,
+  `language_packages`, `jvm_dotnet`, and `schema_docs`
+- opt-in broad vendor category: `vendor_opt_in`
+- explicitly omitted legacy domains: `bower.io`, `continuum.io`,
+  `jcenter.bintray.com`, `rubyforge.org`, and `rvm.io`
+
+The SOCKS relay is disabled by default. It remains available as an explicit
+operator opt-in, but it changes the enforcement point from the sidecar's
+domain-resolved destination list to the host-side proxy policy.
+
 ### Control flow
 
 The wrapper programs the firewall with `podman exec`:
