@@ -96,6 +96,11 @@ its built-in defaults. The default global file is
 additional colon-separated files. Later env files override earlier env files,
 but caller-provided environment variables stay strongest.
 
+Variables named `CODEX_ENV_<NAME>` are exported to the Codex app container as
+`<NAME>` only. This gives operators a namespaced way to provide app secrets and
+settings without making those names part of the launcher's own configuration
+surface.
+
 For long-lived or mutating commands, the launcher re-execs through a runtime
 snapshot under `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container` so edits
 to the source script after invocation do not affect that active command.

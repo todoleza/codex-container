@@ -207,6 +207,24 @@ Later env files override earlier env files. Variables already present in the
 caller environment override all env files, so one-off invocations such as
 `PROXY_ENABLE=1 codex.sh ...` remain strongest.
 
+Variables named `CODEX_ENV_<NAME>` are propagated only to the Codex app
+container as `<NAME>`. This keeps host/launcher variable names separate from
+the names seen by Codex:
+
+```bash
+CODEX_ENV_OPENAI_API_KEY=...
+```
+
+starts the app container with `OPENAI_API_KEY` set. The original
+`CODEX_ENV_OPENAI_API_KEY` name is not passed into the container. The same
+mapping is also applied to later `enter` and `shell` exec sessions, including
+when the workspace is selected by `--id`. In `.envrc`, this is useful with
+wallet-backed secrets:
+
+```bash
+export CODEX_ENV_OPENAI_API_KEY="$(kwallet-query kdewallet -f Passwords -r OPENAI_API_KEY)"
+```
+
 For long-lived or mutating commands, the launcher copies itself to
 `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/launcher-snapshots` and
 re-execs the copy once. This protects active `start`, `spawn`, `replace`,

@@ -195,16 +195,10 @@ for domain in ${OPENAI_ALLOWED_DOMAINS}; do
 done
 
 OPENAI_ALLOWED_DOMAINS="$(printf '%s\n' "${FINAL_ALLOWED_DOMAINS[@]}" | sort -u | xargs)"
-read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
-read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
-read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
-read -r -a PODMAN_POD_CREATE_ARGS_ARRAY <<< "${PODMAN_POD_CREATE_ARGS}"
-read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
-read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
-read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
 PROXY_VOLUME_ARGS_ARRAY=()
 FIREWALL_POLICY_VOLUME_ARGS_ARRAY=()
 APP_POLICY_VOLUME_ARGS_ARRAY=()
+CODEX_APP_ENV_ARGS_ARRAY=()
 ACTION="start"
 ACTION_ARGS=()
 START_ARGS=()
@@ -214,6 +208,43 @@ WORK_DIR_SELECTED=0
 WORKSPACE_ALIAS=""
 WORKSPACE_SEQ=""
 REGISTRY_ROOT=""
+
+collect_codex_app_env_args() {
+  local source_name
+  local target_name
+  local source_names=()
+
+  while IFS= read -r source_name; do
+    [ -n "${source_name}" ] || continue
+    source_names+=("${source_name}")
+  done < <(compgen -v CODEX_ENV_ | sort)
+
+  for source_name in "${source_names[@]}"; do
+    target_name="${source_name#CODEX_ENV_}"
+    if ! [[ "${target_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Error: Invalid CODEX_ENV_ target variable: ${source_name}" >&2
+      exit 1
+    fi
+
+    printf -v "${target_name}" '%s' "${!source_name}"
+    export "${target_name}"
+    CODEX_APP_ENV_ARGS_ARRAY+=(-e "${target_name}")
+  done
+}
+
+refresh_runtime_arrays() {
+  read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
+  read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
+  read -r -a EXTRA_ALLOWED_IPV6_ARRAY <<< "${EXTRA_ALLOWED_IPV6}"
+  read -r -a PODMAN_POD_CREATE_ARGS_ARRAY <<< "${PODMAN_POD_CREATE_ARGS}"
+  read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
+  read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
+  read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
+  CODEX_APP_ENV_ARGS_ARRAY=()
+  collect_codex_app_env_args
+}
+
+refresh_runtime_arrays
 
 usage() {
   cat <<'EOF'
@@ -431,6 +462,23 @@ apply_trailing_selector() {
   echo "Error: ${ACTION} accepts at most one trailing workspace id, and only without --id or --wd." >&2
   usage >&2
   exit 1
+}
+
+load_selected_workspace_env_if_needed() {
+  local selected_file
+
+  if caller_env_has CODEX_CONTAINER_WORKSPACE_ENV_FILE; then
+    return 0
+  fi
+
+  selected_file="$(realpath -m "${WORK_DIR}/.codex-container.env")"
+  if [ "${selected_file}" = "${CODEX_CONTAINER_WORKSPACE_ENV_FILE}" ]; then
+    return 0
+  fi
+
+  CODEX_CONTAINER_WORKSPACE_ENV_FILE="${selected_file}"
+  load_env_file "${CODEX_CONTAINER_WORKSPACE_ENV_FILE}"
+  refresh_runtime_arrays
 }
 
 hold_startup_summary() {
@@ -795,7 +843,7 @@ exec_in_app() {
     exec_args+=(-t)
   fi
 
-  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" -w "/app${WORK_DIR}" "${CONTAINER_NAME}" "$@"
+  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "/app${WORK_DIR}" "${CONTAINER_NAME}" "$@"
 }
 
 exec_in_firewall() {
@@ -1185,6 +1233,7 @@ start_new_pod() {
     -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
     -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
     -e CODEX_FIREWALL_POLICY_DIR="${CODEX_FIREWALL_POLICY_DIR}" \
+    "${CODEX_APP_ENV_ARGS_ARRAY[@]}" \
     --cap-drop=ALL \
     --security-opt=no-new-privileges \
     --user "$(id -u):$(id -g)" \
@@ -1236,6 +1285,7 @@ if [ -n "${SELECTOR_ID}" ] && [ "${WORK_DIR_SELECTED}" = "0" ]; then
 fi
 
 WORK_DIR=$(realpath -m "$WORK_DIR")
+load_selected_workspace_env_if_needed
 WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
 WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
 POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
