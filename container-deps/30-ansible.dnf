@@ -4,3 +4,4 @@ ansible-collection-ansible-posix
 ansible-collection-community-general
 linux-system-roles
 ansible-lint
+ansible

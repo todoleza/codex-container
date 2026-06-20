@@ -1,6 +1,6 @@
 python3-requests
 python3-setuptools
-yt-dlp
+python3-dateutil
 exiftool
 rsync
 tmux
@@ -10,3 +10,4 @@ parallel
 strings
 man
 file
+which
