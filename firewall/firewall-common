@@ -5,6 +5,11 @@ STATE_DIR="${CODEX_FIREWALL_STATE_DIR:-/etc/codex-firewall}"
 DOMAINS_FILE="${STATE_DIR}/domains.txt"
 IPV4_FILE="${STATE_DIR}/ipv4.txt"
 IPV6_FILE="${STATE_DIR}/ipv6.txt"
+RESOLVED_IPV4_FILE="${STATE_DIR}/resolved_ipv4.txt"
+RESOLVED_IPV6_FILE="${STATE_DIR}/resolved_ipv6.txt"
+DNS_IPV4_FILE="${STATE_DIR}/dns_ipv4.txt"
+DNS_IPV6_FILE="${STATE_DIR}/dns_ipv6.txt"
+STATUS_FILE="${STATE_DIR}/status.env"
 
 ensure_state_dir() {
   mkdir -p "${STATE_DIR}"
@@ -46,4 +51,13 @@ is_ipv6_address() {
 
 resolver_addresses() {
   awk '/^nameserver / { print $2 }' /etc/resolv.conf
+}
+
+write_status() {
+  local mode="$1"
+
+  {
+    printf 'CODEX_FIREWALL_MODE=%s\n' "${mode}"
+    printf 'CODEX_FIREWALL_UPDATED_EPOCH=%s\n' "$(date +%s)"
+  } > "${STATUS_FILE}"
 }

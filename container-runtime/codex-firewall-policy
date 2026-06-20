@@ -1,0 +1,126 @@
+#!/bin/bash
+set -euo pipefail
+
+POLICY_DIR="${CODEX_FIREWALL_POLICY_DIR:-/run/codex-firewall-policy}"
+
+usage() {
+  cat <<'EOF'
+Usage: codex-firewall-policy [--json|--path]
+
+Show the current Codex firewall policy exposed inside the app container.
+EOF
+}
+
+read_status_value() {
+  local key="$1"
+  local value=""
+
+  if [ -f "${POLICY_DIR}/status.env" ]; then
+    value=$(awk -F= -v key="${key}" '$1 == key { print $2; exit }' "${POLICY_DIR}/status.env")
+  fi
+
+  printf '%s' "${value}"
+}
+
+print_section() {
+  local title="$1"
+  local file="$2"
+
+  printf '%s:\n' "${title}"
+  if [ -f "${file}" ]; then
+    sed 's/^/  /' "${file}"
+  fi
+}
+
+json_string() {
+  local value="$1"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  printf '"%s"' "${value}"
+}
+
+json_array_file() {
+  local file="$1"
+  local first=1
+  local line
+
+  printf '['
+  if [ -f "${file}" ]; then
+    while IFS= read -r line; do
+      [ -n "${line}" ] || continue
+      if [ "${first}" = "0" ]; then
+        printf ','
+      fi
+      json_string "${line}"
+      first=0
+    done < "${file}"
+  fi
+  printf ']'
+}
+
+print_json() {
+  local mode updated
+
+  mode="$(read_status_value CODEX_FIREWALL_MODE)"
+  updated="$(read_status_value CODEX_FIREWALL_UPDATED_EPOCH)"
+  [ -n "${mode}" ] || mode="unknown"
+
+  printf '{'
+  printf '"mode":'
+  json_string "${mode}"
+  printf ',"updated_epoch":'
+  json_string "${updated}"
+  printf ',"policy_dir":'
+  json_string "${POLICY_DIR}"
+  printf ',"domains":'
+  json_array_file "${POLICY_DIR}/domains.txt"
+  printf ',"ipv4":'
+  json_array_file "${POLICY_DIR}/ipv4.txt"
+  printf ',"ipv6":'
+  json_array_file "${POLICY_DIR}/ipv6.txt"
+  printf ',"resolved_ipv4":'
+  json_array_file "${POLICY_DIR}/resolved_ipv4.txt"
+  printf ',"resolved_ipv6":'
+  json_array_file "${POLICY_DIR}/resolved_ipv6.txt"
+  printf ',"dns_ipv4":'
+  json_array_file "${POLICY_DIR}/dns_ipv4.txt"
+  printf ',"dns_ipv6":'
+  json_array_file "${POLICY_DIR}/dns_ipv6.txt"
+  printf '}\n'
+}
+
+if [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+if [ "${1:-}" = "--path" ]; then
+  printf '%s\n' "${POLICY_DIR}"
+  exit 0
+fi
+
+if [ "${1:-}" = "--json" ]; then
+  print_json
+  exit 0
+fi
+
+if [ "$#" -gt 0 ]; then
+  usage >&2
+  exit 1
+fi
+
+mode="$(read_status_value CODEX_FIREWALL_MODE)"
+updated="$(read_status_value CODEX_FIREWALL_UPDATED_EPOCH)"
+[ -n "${mode}" ] || mode="unknown"
+
+printf 'mode: %s\n' "${mode}"
+printf 'updated_epoch: %s\n' "${updated}"
+printf 'policy_dir: %s\n' "${POLICY_DIR}"
+print_section domains "${POLICY_DIR}/domains.txt"
+print_section ipv4 "${POLICY_DIR}/ipv4.txt"
+print_section ipv6 "${POLICY_DIR}/ipv6.txt"
+print_section resolved_ipv4 "${POLICY_DIR}/resolved_ipv4.txt"
+print_section resolved_ipv6 "${POLICY_DIR}/resolved_ipv6.txt"
+print_section dns_ipv4 "${POLICY_DIR}/dns_ipv4.txt"
+print_section dns_ipv6 "${POLICY_DIR}/dns_ipv6.txt"

@@ -15,6 +15,7 @@ COPY firewall/firewall-init \
      firewall/firewall-allow-domain \
      firewall/firewall-allow-address \
      firewall/firewall-reload \
+     firewall/firewall-lift \
      firewall/firewall-list \
      /usr/local/bin/
 
@@ -22,5 +23,6 @@ RUN chmod 500 /usr/local/bin/firewall-init \
     /usr/local/bin/firewall-allow-domain \
     /usr/local/bin/firewall-allow-address \
     /usr/local/bin/firewall-reload \
+    /usr/local/bin/firewall-lift \
     /usr/local/bin/firewall-list \
   && chmod 500 /usr/local/lib/codex-firewall/firewall-common.sh

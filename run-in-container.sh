@@ -26,6 +26,7 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 : "${PROXY_LISTEN_PORT:=1080}"
 : "${PROXY_UPSTREAM_HOST:=localhost}"
 : "${PROXY_UPSTREAM_PORT:=1080}"
+: "${CODEX_FIREWALL_POLICY_DIR:=/run/codex-firewall-policy}"
 : "${CODEX_SANDBOX_MODE:=danger-full-access}"
 : "${CODEX_APPROVAL_POLICY:=on-request}"
 : "${CODEX_DANGEROUS_BYPASS:=0}"
@@ -105,6 +106,8 @@ read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
 read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
 read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
 PROXY_VOLUME_ARGS_ARRAY=()
+FIREWALL_POLICY_VOLUME_ARGS_ARRAY=()
+APP_POLICY_VOLUME_ARGS_ARRAY=()
 ACTION="start"
 ACTION_ARGS=()
 START_ARGS=()
@@ -351,7 +354,7 @@ proxy_enabled() {
 }
 
 prepare_proxy_runtime_dir() {
-  proxy_enabled || return
+  proxy_enabled || return 0
 
   mkdir -p "${PROXY_RUNTIME_DIR_HOST}" || {
     echo "Warning: could not create proxy runtime dir at ${PROXY_RUNTIME_DIR_HOST}; disabling proxy relay." >&2
@@ -361,6 +364,18 @@ prepare_proxy_runtime_dir() {
   chmod 0777 "${PROXY_RUNTIME_DIR_HOST}" || {
     echo "Warning: could not relax proxy runtime dir permissions at ${PROXY_RUNTIME_DIR_HOST}; disabling proxy relay." >&2
     PROXY_ENABLE=0
+  }
+}
+
+prepare_firewall_policy_runtime_dir() {
+  mkdir -p "${FIREWALL_POLICY_RUNTIME_DIR_HOST}" || {
+    echo "Error: could not create firewall policy runtime dir at ${FIREWALL_POLICY_RUNTIME_DIR_HOST}." >&2
+    exit 1
+  }
+
+  chmod 0755 "${FIREWALL_POLICY_RUNTIME_DIR_HOST}" || {
+    echo "Error: could not set firewall policy runtime dir permissions at ${FIREWALL_POLICY_RUNTIME_DIR_HOST}." >&2
+    exit 1
   }
 }
 
@@ -654,6 +669,19 @@ cleanup_resources() {
     rm -f "${PROXY_RUNTIME_DIR_HOST}/fw-socat.pid" >/dev/null 2>&1 || true
     rmdir "${PROXY_RUNTIME_DIR_HOST}" >/dev/null 2>&1 || true
   fi
+
+  if [ -n "${FIREWALL_POLICY_RUNTIME_DIR_HOST:-}" ]; then
+    rm -f "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/domains.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/ipv4.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/ipv6.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/resolved_ipv4.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/resolved_ipv6.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/dns_ipv4.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/dns_ipv6.txt" \
+      "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/status.env" >/dev/null 2>&1 || true
+    rmdir "${FIREWALL_POLICY_RUNTIME_DIR_HOST}" >/dev/null 2>&1 || true
+  fi
+
   podman rm --time="${app_time}" -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$PROXY_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
@@ -851,6 +879,7 @@ print_startup_summary() {
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
   echo "timezone: ${HOST_TZ}"
+  echo "firewall policy dir: ${FIREWALL_POLICY_RUNTIME_DIR_HOST} -> ${CODEX_FIREWALL_POLICY_DIR}"
   echo "allowed domain categories: ${CODEX_ALLOWED_DOMAIN_CATEGORIES}"
   echo "allowed domains: ${OPENAI_ALLOWED_DOMAINS}"
   echo "omitted preset domains: ${CODEX_OMITTED_DOMAINS}"
@@ -892,7 +921,7 @@ print_startup_summary() {
 }
 
 start_proxy_container() {
-  proxy_enabled || return
+  proxy_enabled || return 0
 
   podman run --name "$PROXY_NAME" -d \
     --network host \
@@ -923,7 +952,7 @@ start_proxy_container() {
 }
 
 start_proxy() {
-  proxy_enabled || return
+  proxy_enabled || return 0
 
   podman exec -d "$FW_NAME" sh -c '
     set -eu
@@ -947,7 +976,12 @@ start_new_pod() {
   cleanup_resources immediate
   trap 'cleanup_resources graceful' EXIT
   prepare_proxy_runtime_dir
-  proxy_enabled && PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
+  prepare_firewall_policy_runtime_dir
+  if proxy_enabled; then
+    PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
+  fi
+  FIREWALL_POLICY_VOLUME_ARGS_ARRAY=(-v "${FIREWALL_POLICY_RUNTIME_DIR_HOST}:/etc/codex-firewall:z")
+  APP_POLICY_VOLUME_ARGS_ARRAY=(-v "${FIREWALL_POLICY_RUNTIME_DIR_HOST}:${CODEX_FIREWALL_POLICY_DIR}:ro,z")
 
   podman pod create \
     --name "$POD_NAME" \
@@ -972,6 +1006,7 @@ start_new_pod() {
     -e TZ="${HOST_TZ}" \
     --cap-add=NET_ADMIN \
     --security-opt=no-new-privileges \
+    "${FIREWALL_POLICY_VOLUME_ARGS_ARRAY[@]}" \
     "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
     "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
     "${FIREWALL_CONTAINER_IMAGE}" \
@@ -981,17 +1016,17 @@ start_new_pod() {
 
   podman exec "$FW_NAME" firewall-init
 
-  for domain in "${ALLOWED_DOMAIN_ARRAY[@]}"; do
-    podman exec "$FW_NAME" firewall-allow-domain "$domain"
-  done
+  if [ "${#ALLOWED_DOMAIN_ARRAY[@]}" -gt 0 ]; then
+    printf '%s\n' "${ALLOWED_DOMAIN_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-domain
+  fi
 
-  for address in "${EXTRA_ALLOWED_IPV4_ARRAY[@]}"; do
-    podman exec "$FW_NAME" firewall-allow-address "$address"
-  done
+  if [ "${#EXTRA_ALLOWED_IPV4_ARRAY[@]}" -gt 0 ]; then
+    printf '%s\n' "${EXTRA_ALLOWED_IPV4_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+  fi
 
-  for address in "${EXTRA_ALLOWED_IPV6_ARRAY[@]}"; do
-    podman exec "$FW_NAME" firewall-allow-address "$address"
-  done
+  if [ "${#EXTRA_ALLOWED_IPV6_ARRAY[@]}" -gt 0 ]; then
+    printf '%s\n' "${EXTRA_ALLOWED_IPV6_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+  fi
 
   podman exec "$FW_NAME" firewall-reload
   start_proxy
@@ -1009,11 +1044,13 @@ start_new_pod() {
     -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
     -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
     -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
+    -e CODEX_FIREWALL_POLICY_DIR="${CODEX_FIREWALL_POLICY_DIR}" \
     --cap-drop=ALL \
     --security-opt=no-new-privileges \
     --user "$(id -u):$(id -g)" \
     -v "$HOME/.codex:/home/node/.codex:z" \
     -v "$WORK_DIR:/app$WORK_DIR" \
+    "${APP_POLICY_VOLUME_ARGS_ARRAY[@]}" \
     "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \
     "${CONTAINER_IMAGE}" \
     codex-container-init
@@ -1067,6 +1104,8 @@ CONTAINER_NAME="${POD_NAME}-app"
 HOST_TZ=$(detect_host_tz)
 DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
 : "${PROXY_RUNTIME_DIR_HOST:=${DEFAULT_PROXY_RUNTIME_DIR_HOST}}"
+DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-policy"
+: "${FIREWALL_POLICY_RUNTIME_DIR_HOST:=${DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST}}"
 
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."

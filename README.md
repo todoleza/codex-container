@@ -41,6 +41,7 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - defaults Codex itself to `--sandbox danger-full-access` and propagates that policy into the app container
   - starts interactive shells in the mounted workspace via an image profile hook
   - builds the firewall allowlist from named domain categories, with explicitly omitted preset domains kept out by default
+  - exposes the current firewall policy read-only inside the app container through `codex-firewall-policy`
   - can start an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
   - provides launcher commands for list/status/name, app and firewall exec, copy/pull, replace, and destroy

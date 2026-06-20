@@ -11,3 +11,5 @@ else
 fi
 
 ensure_state_dir
+nft delete table inet codex_firewall >/dev/null 2>&1 || true
+write_status lifted

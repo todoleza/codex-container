@@ -33,7 +33,7 @@ The sidecar uses `nftables` in the `inet` family so IPv4 and IPv6 are handled to
 - allowed domains are stored in `domains.txt`
 - explicit IPv4 entries are stored in `ipv4.txt`
 - explicit IPv6 entries are stored in `ipv6.txt`
-- `firewall-reload` resolves `A` and `AAAA` records, reads resolver IPs from `/etc/resolv.conf`, and rebuilds the nftables ruleset
+- `firewall-reload` resolves `A` and `AAAA` records, reads resolver IPs from `/etc/resolv.conf`, records the effective runtime view, and rebuilds the nftables ruleset
 
 Traffic policy:
 
@@ -61,6 +61,20 @@ separate:
 The SOCKS relay is disabled by default. It remains available as an explicit
 operator opt-in, but it changes the enforcement point from the sidecar's
 domain-resolved destination list to the host-side proxy policy.
+
+### Runtime policy visibility
+
+The firewall state directory is host-backed and shared by the pod:
+
+- the firewall sidecar mounts it read-write at `/etc/codex-firewall`
+- the Codex app container mounts it read-only at `/run/codex-firewall-policy`
+- `codex-firewall-policy` prints the current configured and resolved policy
+
+Manual `fwenter` changes are visible to the app after the relevant
+`firewall-allow-*`, `firewall-reload`, or `firewall-lift` command updates the
+shared state. `firewall-lift` deletes only the `inet codex_firewall` table and
+records `CODEX_FIREWALL_MODE=lifted`; `firewall-reload` restores enforcement
+from the configured policy and records `CODEX_FIREWALL_MODE=enforced`.
 
 ### Control flow
 

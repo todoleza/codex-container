@@ -63,6 +63,7 @@ The launcher:
 - starts an unprivileged Codex container in the same pod network namespace
 - propagates the workstation timezone into both containers via `TZ`, falling back to `UTC` if detection fails
 - propagates `CODEX_WORKDIR`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_DANGEROUS_BYPASS` into the app container
+- mounts the live firewall policy into the app container read-only and exposes it through `codex-firewall-policy`
 - prints a short startup summary including the current Codex sandbox/approval policy and domain allowlist
 
 The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
@@ -159,6 +160,8 @@ PROXY_LISTEN_HOST=localhost
 PROXY_LISTEN_PORT=1080
 PROXY_UPSTREAM_HOST=localhost
 PROXY_UPSTREAM_PORT=1080
+CODEX_FIREWALL_POLICY_DIR=/run/codex-firewall-policy
+FIREWALL_POLICY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-policy
 CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=on-request
 CODEX_DANGEROUS_BYPASS=0
@@ -195,6 +198,21 @@ one-off domains after category composition.
 default categories because those domains are broad vendor or third-party
 download surfaces. `CODEX_OMITTED_DOMAINS` records legacy preset domains that
 are deliberately not allowed by default.
+
+The firewall sidecar stores live policy state in the host runtime directory
+mounted at `/etc/codex-firewall`. The app container mounts the same directory
+read-only at `CODEX_FIREWALL_POLICY_DIR`, defaulting to
+`/run/codex-firewall-policy`. Inside the app container, use:
+
+```bash
+codex-firewall-policy
+codex-firewall-policy --json
+codex-firewall-policy --path
+```
+
+The view includes configured domains and explicit IP/CIDR entries, resolved
+IPv4/IPv6 destinations from the last `firewall-reload`, DNS resolver addresses,
+and `mode: enforced` or `mode: lifted`.
 
 The proxy path is split in two:
 
@@ -253,4 +271,9 @@ podman exec <firewall-container> firewall-allow-domain example.com
 podman exec <firewall-container> firewall-allow-address 203.0.113.7
 podman exec <firewall-container> firewall-allow-address 2001:db8::7
 podman exec <firewall-container> firewall-reload
+podman exec <firewall-container> firewall-lift
 ```
+
+`firewall-lift` removes only this prototype's `inet codex_firewall` nftables
+table and records `mode: lifted` in the shared policy state. Run
+`firewall-reload` to restore enforcement from the configured policy files.

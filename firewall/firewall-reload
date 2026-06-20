@@ -1,8 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# shellcheck disable=SC1091
-source /usr/local/lib/codex-firewall/firewall-common.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f /usr/local/lib/codex-firewall/firewall-common.sh ]; then
+  # shellcheck disable=SC1091
+  source /usr/local/lib/codex-firewall/firewall-common.sh
+else
+  # shellcheck disable=SC1091
+  source "${script_dir}/firewall-common"
+fi
 
 ensure_state_dir
 
@@ -54,6 +60,11 @@ sort -u -o "${allowed_ipv4_file}" "${allowed_ipv4_file}"
 sort -u -o "${allowed_ipv6_file}" "${allowed_ipv6_file}"
 sort -u -o "${dns_ipv4_file}" "${dns_ipv4_file}"
 sort -u -o "${dns_ipv6_file}" "${dns_ipv6_file}"
+
+cp "${allowed_ipv4_file}" "${RESOLVED_IPV4_FILE}"
+cp "${allowed_ipv6_file}" "${RESOLVED_IPV6_FILE}"
+cp "${dns_ipv4_file}" "${DNS_IPV4_FILE}"
+cp "${dns_ipv6_file}" "${DNS_IPV6_FILE}"
 
 {
   echo "table inet codex_firewall {"
@@ -112,3 +123,4 @@ sort -u -o "${dns_ipv6_file}" "${dns_ipv6_file}"
 
 nft delete table inet codex_firewall >/dev/null 2>&1 || true
 nft -f "${nft_file}"
+write_status enforced
