@@ -14,11 +14,15 @@ This repo creates container with Codex CLI in a rootless Podman pod with:
 The intended build flow is:
 
 ```bash
-./gen-dist.sh
+./codex-artifact.sh prepare
 ./build-images.sh
 ```
 
-`gen-dist.sh` stages `dist/codex.tgz`. The container build consumes that archive and does not run `pnpm` locally.
+`codex-artifact.sh prepare` downloads the selected upstream
+`codex-npm-<version>.tgz` asset from GitHub releases into
+`.build-cache/upstream/codex/`, stages `dist/codex.tgz`, and writes
+`dist/codex-artifact.env`. The container build consumes that staged archive and
+does not run `pnpm` or `npm pack` locally.
 
 The image build defaults to `buildah bud`; set `CONTAINER_CLI=podman` to use
 Podman as an override. The runtime image is generated from `Dockerfile.in`;
@@ -33,6 +37,13 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
 
 ## Entry points
 
+- `codex-artifact.sh`
+  - build-side artifact command entrypoint
+  - source Codex npm tarballs from GitHub releases
+  - keep upstream artifacts out of the repository root
+- `build-images.sh`
+  - build-side image command
+  - checks staged artifact freshness before building
 - `run-in-container.sh`
   - primary launcher
   - uses `podman pod create` directly

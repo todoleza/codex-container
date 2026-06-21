@@ -3,11 +3,39 @@
 Build both images from `codex-container/`:
 
 ```bash
-./gen-dist.sh
+./codex-artifact.sh prepare
 ./build-images.sh
 ```
 
-`gen-dist.sh` is the step that stages `dist/codex.tgz`. `build-images.sh` now only consumes that archive; it does not run `pnpm`, rebuild the package, or repack anything on its own.
+`codex-artifact.sh prepare` stages `dist/codex.tgz` from the upstream GitHub
+release asset named `codex-npm-<version>.tgz`, for example
+`codex-npm-0.142.0-alpha.7.tgz`. Downloaded upstream artifacts live under
+`.build-cache/upstream/codex/` instead of the repository root. `build-images.sh`
+only consumes the staged archive; it does not run `pnpm`, rebuild the package,
+or repack anything on its own.
+
+Artifact commands:
+
+```bash
+./codex-artifact.sh prepare
+./codex-artifact.sh prepare type alpha
+./codex-artifact.sh prepare version 0.142.0-alpha.7
+./codex-artifact.sh status
+./codex-artifact.sh clean
+```
+
+The default artifact type is `release`, which selects the latest non-prerelease
+GitHub release. `type alpha` selects the latest upstream alpha prerelease.
+`version VERSION` selects the exact `rust-v<VERSION>` GitHub tag.
+
+`codex-artifact.sh status` prints the staged artifact plus latest release and
+latest alpha status in one report. `build-images.sh` checks whether the staged
+artifact is older than the latest upstream version for its artifact type. In an
+interactive terminal it asks whether to refresh, continue, or abort. In batch
+mode it does not prompt and fails by default. Batch mode is enabled by either
+`--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`, `INTERACTIVE=0`, or
+non-TTY stdin. Override stale handling with
+`CODEX_ARTIFACT_STALE_POLICY=continue|refresh|fail`.
 
 The runtime build is generated from `Dockerfile.in`. Sorted
 `container-deps/*.dnf` drop-ins become separate DNF install layers, and
