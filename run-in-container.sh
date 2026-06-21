@@ -86,7 +86,37 @@ detect_requested_work_dir() {
   printf '%s\n' "${WORK_DIR}"
 }
 
-EARLY_WORK_DIR="$(realpath -m "$(detect_requested_work_dir "$@")")"
+resolve_workspace_root() {
+  local dir
+  local git_root
+  local search_dir
+  local parent_dir
+
+  dir="$(realpath -m "$1")"
+
+  if git_root="$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null)"; then
+    realpath -m "${git_root}"
+    return
+  fi
+
+  search_dir="${dir}"
+  while true; do
+    if [ -f "${search_dir}/.codex-container.env" ]; then
+      printf '%s\n' "${search_dir}"
+      return
+    fi
+
+    parent_dir="$(dirname "${search_dir}")"
+    if [ "${parent_dir}" = "${search_dir}" ]; then
+      break
+    fi
+    search_dir="${parent_dir}"
+  done
+
+  printf '%s\n' "${dir}"
+}
+
+EARLY_WORK_DIR="$(resolve_workspace_root "$(detect_requested_work_dir "$@")")"
 : "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
 : "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
 
@@ -1723,7 +1753,7 @@ if [ -n "${SELECTOR_ID}" ] && [ "${WORK_DIR_SELECTED}" = "0" ]; then
   WORK_DIR=$(read_state_file "${SELECTOR_STATE_DIR}" path)
 fi
 
-WORK_DIR=$(realpath -m "$WORK_DIR")
+WORK_DIR=$(resolve_workspace_root "$WORK_DIR")
 load_selected_workspace_env_if_needed
 WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
 WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
@@ -1929,10 +1959,7 @@ case "${ACTION}" in
     if app_running; then
       ensure_workspace_record "${WORK_DIR}"
       if [ "${#START_ARGS[@]}" -eq 0 ]; then
-        prompt_existing_container
-        if [ "${ACTION}" = "replace" ]; then
-          cleanup_resources immediate
-        fi
+        exec_shell_action tty
       else
         run_codex_in_app
       fi

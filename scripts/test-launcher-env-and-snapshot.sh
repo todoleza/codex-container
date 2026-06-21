@@ -6,7 +6,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
 fakebin="${tmpdir}/bin"
-mkdir -p "${fakebin}" "${tmpdir}/runtime" "${tmpdir}/home/.local/share/codex-container" "${tmpdir}/work"
+mkdir -p "${fakebin}" "${tmpdir}/runtime" "${tmpdir}/home/.local/share/codex-container" "${tmpdir}/work/subdir" "${tmpdir}/gitroot/subdir"
 
 cat > "${fakebin}/podman" <<'FAKE_PODMAN'
 #!/bin/sh
@@ -120,8 +120,31 @@ grep -Fq '0.141.0' "${workspace_state_dir}/codex_cli_version"
 grep -Fq '0.222.0' "${workspace_state_dir}/codex_cli_latest"
 
 : > "${PODMAN_LOG}"
+"${repo_root}/run-in-container.sh" --wd "${tmpdir}/work/subdir" spawn > "${tmpdir}/nested-env.out"
+grep -Fq "workdir: ${tmpdir}/work" "${tmpdir}/nested-env.out"
+grep -Fq "loaded env files: ${tmpdir}/home/.local/share/codex-container/env ${tmpdir}/work/.codex-container.env ${tmpdir}/extra.env" "${tmpdir}/nested-env.out"
+grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/work" "${PODMAN_LOG}"
+grep -Fq -- "-v ${tmpdir}/work:/app${tmpdir}/work" "${PODMAN_LOG}"
+
+git -C "${tmpdir}/gitroot" init -q
+: > "${PODMAN_LOG}"
+"${repo_root}/run-in-container.sh" --wd "${tmpdir}/gitroot/subdir" spawn > "${tmpdir}/nested-git.out"
+grep -Fq "workdir: ${tmpdir}/gitroot" "${tmpdir}/nested-git.out"
+grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/gitroot" "${PODMAN_LOG}"
+grep -Fq -- "-v ${tmpdir}/gitroot:/app${tmpdir}/gitroot" "${PODMAN_LOG}"
+
+: > "${PODMAN_LOG}"
 FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 enter env > "${tmpdir}/enter.out"
 grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work codex-work-" "${PODMAN_LOG}"
+
+: > "${PODMAN_LOG}"
+FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work/subdir" > "${tmpdir}/nested-start.out"
+grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work codex-work-" "${PODMAN_LOG}"
+grep -Fq -- " bash" "${PODMAN_LOG}"
+if grep -Fq "already running" "${tmpdir}/nested-start.out"; then
+  echo "nested start should enter parent session without prompting" >&2
+  exit 1
+fi
 
 : > "${PODMAN_LOG}"
 FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 rootenter true > "${tmpdir}/rootenter.out"

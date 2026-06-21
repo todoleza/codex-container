@@ -170,11 +170,12 @@ The registry lives under
 from symlinks into per-workspace state directories.
 
 If a workspace container is already running and you start the launcher without
-an explicit launcher command, it offers to enter the existing container, replace
-it, or cancel. `replace` kills any existing workspace pod before normal startup.
-`respawn` kills any existing workspace pod, starts a fresh pod in the
-background, and exits without attaching. If there is nothing to kill, these
-commands print that and continue.
+an explicit launcher command, it enters the existing container. This also
+applies from subdirectories after workspace-root resolution, so starting from a
+nested path jumps to the parent workspace session. `replace` kills any existing
+workspace pod before normal startup. `respawn` kills any existing workspace pod,
+starts a fresh pod in the background, and exits without attaching. If there is
+nothing to kill, these commands print that and continue.
 
 After the app container starts successfully, it stays running when a Codex or
 shell session exits. Use `destroy`, `rm`, or `kill` when you want to remove the
@@ -254,6 +255,13 @@ Env files are optional dotenv-style files with `KEY=VALUE` lines, blank lines,
 and `#` comments. They are data files, not shell scripts; command substitution,
 variable expansion, and `export KEY=VALUE` syntax are not evaluated. Invalid
 lines stop startup with a clear error.
+
+The launcher resolves the workspace path before loading the workspace env file.
+If the requested directory is inside a Git worktree, the workspace is the Git
+top-level directory. Outside Git, the launcher walks upward to the nearest
+parent containing `.codex-container.env`; if none is found, it uses the
+requested directory as-is. This keeps invocations from subdirectories attached
+to the same parent workspace pod.
 
 The load order is:
 
