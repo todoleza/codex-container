@@ -121,6 +121,8 @@ Launcher commands are selected by the first recognized non-dash argument:
 ./run-in-container.sh --wd /path/to/repo spawn
 ./run-in-container.sh --id 1 enter
 ./run-in-container.sh --id parent-leaf shell pwd
+./run-in-container.sh --id 1 rootenter
+./run-in-container.sh --id parent-leaf rootshell dnf install -y strace
 ./run-in-container.sh --id 1 fwenter
 ./run-in-container.sh --id parent-leaf fwshell firewall-list
 ./run-in-container.sh --id 1 copy ./local.txt notes/local.txt
@@ -134,12 +136,15 @@ Launcher commands are selected by the first recognized non-dash argument:
 interactive TTY command in the preserved `/app<host-path>` mount, defaulting to
 `bash`.
 `shell` keeps stdin open but does not allocate a TTY, so `shell pwd` prints
-that absolute path. `fwenter` and `fwshell` do the same TTY and non-TTY
-operations in the firewall container; `fwenter` defaults to `bash` and
-`fwshell` requires a command. `copy`/`push` copy host paths into the container;
-`pull`/`fetch` copy container paths out. Relative container copy paths resolve
-under the same preserved mount; local copy paths such as `./file` are resolved
-to absolute host paths before calling `podman cp`.
+that absolute path. `rootenter` and `rootshell` run privileged root commands in
+the app container from `/root`; use them for live container maintenance and
+ad-hoc dependency probing, not as durable image changes. `fwenter` and
+`fwshell` do the same TTY and non-TTY operations in the firewall container;
+`fwenter` defaults to `bash` and `fwshell` requires a command. `copy`/`push`
+copy host paths into the container; `pull`/`fetch` copy container paths out.
+Relative container copy paths resolve under the same preserved mount; local copy
+paths such as `./file` are resolved to absolute host paths before calling
+`podman cp`.
 
 `list` shows registered workspaces by stable runtime sequence number, slug alias,
 state, start time, and path. `--id` can select a workspace by that sequence
@@ -263,9 +268,9 @@ export CODEX_ENV_OPENAI_API_KEY="$(kwallet-query kdewallet -f Passwords -r OPENA
 For long-lived or mutating commands, the launcher copies itself to
 `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/launcher-snapshots` and
 re-execs the copy once. This protects active `start`, `spawn`, `replace`,
-`respawn`, `enter`, `shell`, `fwenter`, `fwshell`, copy/pull, and remove
-operations from subsequent edits to the source launcher. Short read-only
-commands `help`, `list`, `name`, and `status` run directly.
+`respawn`, `enter`, `shell`, `rootenter`, `rootshell`, `fwenter`, `fwshell`,
+copy/pull, and remove operations from subsequent edits to the source launcher.
+Short read-only commands `help`, `list`, `name`, and `status` run directly.
 
 `CODEX_ALLOWED_DOMAIN_CATEGORIES` composes the default firewall domain
 allowlist from named groups. Remove whole categories for narrower environments,

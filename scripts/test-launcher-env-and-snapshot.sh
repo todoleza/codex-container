@@ -123,6 +123,14 @@ grep -Fq '0.222.0' "${workspace_state_dir}/codex_cli_latest"
 FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 enter env > "${tmpdir}/enter.out"
 grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work codex-work-" "${PODMAN_LOG}"
 
+: > "${PODMAN_LOG}"
+FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 rootenter true > "${tmpdir}/rootenter.out"
+grep -Fq -- "exec -i -t --privileged --user 0 -e HOME=/root -w /root codex-work-" "${PODMAN_LOG}"
+
+: > "${PODMAN_LOG}"
+FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 rootshell id > "${tmpdir}/rootshell.out"
+grep -Fq -- "exec -i --privileged --user 0 -e HOME=/root -w /root codex-work-" "${PODMAN_LOG}"
+
 PROXY_ENABLE=1 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work" spawn > "${tmpdir}/caller.out"
 grep -Fq "proxy relay: localhost:1080 -> localhost:1080" "${tmpdir}/caller.out"
 
@@ -142,6 +150,8 @@ if grep -Fq "launcher snapshot:" "${tmpdir}/help.out"; then
   echo "help should not snapshot" >&2
   exit 1
 fi
+grep -Fq "rootenter" "${tmpdir}/help.out"
+grep -Fq "rootshell" "${tmpdir}/help.out"
 
 cat > "${tmpdir}/bad.env" <<'EOF_BAD'
 not valid

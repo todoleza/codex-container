@@ -390,6 +390,8 @@ Usage:
   run-in-container.sh [--id ID|--wd DIR] spawn [ID]
   run-in-container.sh [--id ID|--wd DIR] enter [COMMAND...]
   run-in-container.sh [--id ID|--wd DIR] shell COMMAND...
+  run-in-container.sh [--id ID|--wd DIR] rootenter [COMMAND...]
+  run-in-container.sh [--id ID|--wd DIR] rootshell COMMAND...
   run-in-container.sh [--id ID|--wd DIR] fwenter [COMMAND...]
   run-in-container.sh [--id ID|--wd DIR] fwshell COMMAND...
   run-in-container.sh [--id ID|--wd DIR] replace [CODEX_ARGS...]
@@ -406,6 +408,8 @@ Launcher commands:
   spawn         Start the workspace pod in the background and exit.
   enter         Enter the running workspace container with a TTY. Defaults to bash.
   shell         Run a command in the running workspace container without a TTY.
+  rootenter     Enter the app container as privileged root. Defaults to bash in /root.
+  rootshell     Run a privileged root command in the app container without a TTY.
   fwenter       Enter the firewall container with a TTY. Defaults to bash.
   fwshell       Run a command in the firewall container without a TTY.
   replace       Remove any existing workspace pod, then start Codex normally.
@@ -565,7 +569,7 @@ parse_args() {
         ;;
       *)
         case "$1" in
-          help|list|status|name|spawn|enter|shell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
+          help|list|status|name|spawn|enter|shell|rootenter|rootshell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
             ACTION="$1"
             shift
             ACTION_ARGS=("$@")
@@ -989,6 +993,18 @@ exec_in_app() {
   podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "/app${WORK_DIR}" "${CONTAINER_NAME}" "$@"
 }
 
+exec_in_app_root() {
+  local tty_mode="$1"
+  shift
+  local exec_args=(-i)
+
+  if [ "${tty_mode}" = "tty" ]; then
+    exec_args+=(-t)
+  fi
+
+  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" --privileged --user 0 -e HOME=/root -w /root "${CONTAINER_NAME}" "$@"
+}
+
 exec_in_firewall() {
   local tty_mode="$1"
   shift
@@ -1022,6 +1038,30 @@ exec_shell_action() {
   fi
 
   exec_in_app "${tty_mode}" "$@"
+  exit $?
+}
+
+exec_root_shell_action() {
+  local tty_mode="$1"
+  shift
+
+  if ! app_running; then
+    echo "Error: ${CONTAINER_NAME} is not running." >&2
+    echo "Start it first with: $0 --wd ${WORK_DIR}" >&2
+    exit 1
+  fi
+
+  if [ "$#" -eq 0 ]; then
+    if [ "${tty_mode}" = "tty" ]; then
+      set -- bash
+    else
+      echo "Error: rootshell requires a command." >&2
+      usage >&2
+      exit 1
+    fi
+  fi
+
+  exec_in_app_root "${tty_mode}" "$@"
   exit $?
 }
 
@@ -1577,6 +1617,12 @@ case "${ACTION}" in
     ;;
   shell)
     exec_shell_action notty "${ACTION_ARGS[@]}"
+    ;;
+  rootenter)
+    exec_root_shell_action tty "${ACTION_ARGS[@]}"
+    ;;
+  rootshell)
+    exec_root_shell_action notty "${ACTION_ARGS[@]}"
     ;;
   fwenter)
     exec_firewall_action tty "${ACTION_ARGS[@]}"
