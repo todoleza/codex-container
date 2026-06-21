@@ -48,7 +48,7 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - saves the staged Codex CLI version onto the runtime image at build time, then labels spawned pods and app containers with that image version and the latest GitHub release version seen at spawn time
   - can start an optional two-hop `socat` relay, with a dedicated proxy container owning the host-side hop and the firewall sidecar bridging `localhost:1080` to `/run/codex-proxy/proxy.sock`
   - supports environment overrides for extra Podman args and startup-summary hold time
-  - provides launcher commands for list/status/name, app and firewall exec, copy/pull, replace, and destroy
+  - provides launcher commands for list/status/name, app and firewall exec, copy/pull, replace, respawn, and destroy
 - `run-in-podman-kube.sh` - experimental
   - draft launcher
   - uses `podman kube play`

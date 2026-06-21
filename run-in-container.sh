@@ -393,6 +393,7 @@ Usage:
   run-in-container.sh [--id ID|--wd DIR] fwenter [COMMAND...]
   run-in-container.sh [--id ID|--wd DIR] fwshell COMMAND...
   run-in-container.sh [--id ID|--wd DIR] replace [CODEX_ARGS...]
+  run-in-container.sh [--id ID|--wd DIR] respawn [ID]
   run-in-container.sh [--id ID|--wd DIR] destroy|rm|kill [ID]
   run-in-container.sh [--id ID|--wd DIR] copy|push LOCAL_PATH CONTAINER_PATH
   run-in-container.sh [--id ID|--wd DIR] pull|fetch CONTAINER_PATH LOCAL_PATH
@@ -408,6 +409,7 @@ Launcher commands:
   fwenter       Enter the firewall container with a TTY. Defaults to bash.
   fwshell       Run a command in the firewall container without a TTY.
   replace       Remove any existing workspace pod, then start Codex normally.
+  respawn       Remove any existing workspace pod, then spawn it in the background.
   destroy, rm   Remove the workspace pod and exit.
   kill          Immediately remove the workspace pod and exit.
   copy, push    Copy from the host into the workspace container.
@@ -563,7 +565,7 @@ parse_args() {
         ;;
       *)
         case "$1" in
-          help|list|status|name|spawn|enter|shell|fwenter|fwshell|replace|destroy|rm|kill|copy|push|pull|fetch)
+          help|list|status|name|spawn|enter|shell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
             ACTION="$1"
             shift
             ACTION_ARGS=("$@")
@@ -580,7 +582,7 @@ parse_args() {
 
 apply_trailing_selector() {
   case "${ACTION}" in
-    status|name|spawn|destroy|rm|kill)
+    status|name|spawn|respawn|destroy|rm|kill)
       ;;
     *)
       return
@@ -1616,6 +1618,20 @@ case "${ACTION}" in
       echo "nothing to replace for ${POD_NAME}; starting new pod"
     fi
     START_ARGS=("${ACTION_ARGS[@]}")
+    ;;
+  respawn)
+    if resource_exists; then
+      echo "respawning ${POD_NAME}"
+      cleanup_resources immediate
+    else
+      echo "nothing to respawn for ${POD_NAME}; starting new pod"
+    fi
+    prepare_codex_version_metadata
+    print_startup_summary
+    hold_startup_summary
+    start_new_pod
+    echo "respawned: ${CONTAINER_NAME}"
+    exit 0
     ;;
   start)
     if app_running; then

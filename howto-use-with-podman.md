@@ -98,6 +98,7 @@ Launcher commands are selected by the first recognized non-dash argument:
 ./run-in-container.sh --id 1 copy ./local.txt notes/local.txt
 ./run-in-container.sh --id parent-leaf pull notes/out.txt ./out.txt
 ./run-in-container.sh --id 1 replace --model gpt-5
+./run-in-container.sh --id 1 respawn
 ./run-in-container.sh rm parent-leaf
 ```
 
@@ -125,7 +126,9 @@ from symlinks into per-workspace state directories.
 If a workspace container is already running and you start the launcher without
 an explicit launcher command, it offers to enter the existing container, replace
 it, or cancel. `replace` kills any existing workspace pod before normal startup.
-If there is nothing to kill, it prints that and continues.
+`respawn` kills any existing workspace pod, starts a fresh pod in the
+background, and exits without attaching. If there is nothing to kill, these
+commands print that and continue.
 
 After the app container starts successfully, it stays running when a Codex or
 shell session exits. Use `destroy`, `rm`, or `kill` when you want to remove the
@@ -232,9 +235,9 @@ export CODEX_ENV_OPENAI_API_KEY="$(kwallet-query kdewallet -f Passwords -r OPENA
 For long-lived or mutating commands, the launcher copies itself to
 `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/launcher-snapshots` and
 re-execs the copy once. This protects active `start`, `spawn`, `replace`,
-`enter`, `shell`, `fwenter`, `fwshell`, copy/pull, and remove operations from
-subsequent edits to the source launcher. Short read-only commands `help`,
-`list`, `name`, and `status` run directly.
+`respawn`, `enter`, `shell`, `fwenter`, `fwshell`, copy/pull, and remove
+operations from subsequent edits to the source launcher. Short read-only
+commands `help`, `list`, `name`, and `status` run directly.
 
 `CODEX_ALLOWED_DOMAIN_CATEGORIES` composes the default firewall domain
 allowlist from named groups. Remove whole categories for narrower environments,
