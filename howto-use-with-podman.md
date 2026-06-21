@@ -212,6 +212,11 @@ PROXY_LISTEN_HOST=localhost
 PROXY_LISTEN_PORT=1080
 PROXY_UPSTREAM_HOST=localhost
 PROXY_UPSTREAM_PORT=1080
+SIDECARS=""
+SIDECAR_hcloud_IMAGE=localhost/hcloud-acl-proxy:latest
+SIDECAR_hcloud_ENV_PREFIX=HCLOUD_PROXY_ENV_
+SIDECAR_hcloud_RUN_ARGS=""
+SIDECAR_hcloud_COMMAND=""
 CODEX_FIREWALL_POLICY_DIR=/run/codex-firewall-policy
 FIREWALL_POLICY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-policy
 CODEX_CONTAINER_GLOBAL_ENV_FILE=$HOME/.local/share/codex-container/env
@@ -350,6 +355,29 @@ Set `PROXY_ENABLE=1` to opt into the relay, or override
 lives somewhere else. The direct firewall path resolves allowed domains to IPs
 and permits only those destinations. The proxy path permits the local proxy hop,
 then the host-side SOCKS service decides the real destination policy.
+
+Named sidecars are separate from the host relay path. Set `SIDECARS` to a
+colon-separated list of sidecar IDs and define an image plus sidecar env prefix
+for each ID:
+
+```bash
+SIDECARS=hcloud
+SIDECAR_hcloud_IMAGE=localhost/hcloud-acl-proxy:latest
+SIDECAR_hcloud_ENV_PREFIX=HCLOUD_PROXY_ENV_
+CODEX_ENV_HCLOUD_ENDPOINT=http://localhost:8090/v1
+CODEX_ENV_HCLOUD_TOKEN=local-proxy-token
+HCLOUD_PROXY_ENV_HCLOUD_TOKEN=real-upstream-token
+HCLOUD_PROXY_ENV_HCLOUD_PROXY_TOKEN=local-proxy-token
+```
+
+The launcher starts sidecars with `--pod <codex-pod>`, so the Codex app reaches
+the proxy through pod-local `localhost`. Variables matching the sidecar env
+prefix are passed only to that sidecar after stripping the prefix; `CODEX_ENV_*`
+variables are still passed only to the Codex app. The launcher passes stripped
+sidecar env names to Podman instead of putting secret values on the command
+line. If the sidecar image needs extra mounts or flags, set
+`SIDECAR_<id>_RUN_ARGS`. If it needs an explicit startup command, set
+`SIDECAR_<id>_COMMAND`, which runs as `sh -lc`.
 
 The primary launcher defaults to:
 

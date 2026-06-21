@@ -135,6 +135,7 @@ fi
 : "${PODMAN_CODEX_RUN_ARGS:=}"
 : "${PODMAN_EXEC_ARGS:=}"
 : "${CONTAINER_EXEC_COMMAND:=}"
+: "${SIDECARS:=}"
 : "${STARTUP_SUMMARY_HOLD_SECONDS:=1.2}"
 
 append_domain_list() {
@@ -202,6 +203,8 @@ PROXY_VOLUME_ARGS_ARRAY=()
 FIREWALL_POLICY_VOLUME_ARGS_ARRAY=()
 APP_POLICY_VOLUME_ARGS_ARRAY=()
 CODEX_APP_ENV_ARGS_ARRAY=()
+SIDECAR_IDS_ARRAY=()
+CLEANUP_SIDECAR_IDS_ARRAY=()
 ACTION="start"
 ACTION_ARGS=()
 START_ARGS=()
@@ -241,6 +244,33 @@ collect_codex_app_env_args() {
   done
 }
 
+collect_prefixed_env_args() {
+  local prefix="$1"
+  local source_name
+  local target_name
+  local source_names=()
+  local env_args=()
+
+  while IFS= read -r source_name; do
+    [ -n "${source_name}" ] || continue
+    source_names+=("${source_name}")
+  done < <(compgen -v "${prefix}" | sort || true)
+
+  for source_name in "${source_names[@]}"; do
+    target_name="${source_name#"${prefix}"}"
+    if ! [[ "${target_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Error: Invalid sidecar env target variable: ${source_name}" >&2
+      exit 1
+    fi
+
+    printf -v "${target_name}" '%s' "${!source_name}"
+    export "${target_name}"
+    env_args+=(-e "${target_name}")
+  done
+
+  printf '%s\0' "${env_args[@]}"
+}
+
 refresh_runtime_arrays() {
   read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
   read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
@@ -249,6 +279,7 @@ refresh_runtime_arrays() {
   read -r -a PODMAN_FIREWALL_RUN_ARGS_ARRAY <<< "${PODMAN_FIREWALL_RUN_ARGS}"
   read -r -a PODMAN_CODEX_RUN_ARGS_ARRAY <<< "${PODMAN_CODEX_RUN_ARGS}"
   read -r -a PODMAN_EXEC_ARGS_ARRAY <<< "${PODMAN_EXEC_ARGS}"
+  IFS=: read -r -a SIDECAR_IDS_ARRAY <<< "${SIDECARS}"
   CODEX_APP_ENV_ARGS_ARRAY=()
   collect_codex_app_env_args
 }
@@ -534,6 +565,59 @@ validate_approval_policy() {
   esac
 }
 
+validate_sidecar_id() {
+  local sidecar_id="$1"
+  [[ "${sidecar_id}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
+}
+
+sidecar_var_value() {
+  local sidecar_id="$1"
+  local suffix="$2"
+  local var_name="SIDECAR_${sidecar_id}_${suffix}"
+
+  printf '%s' "${!var_name:-}"
+}
+
+sidecar_container_name() {
+  local sidecar_id="$1"
+  printf '%s-sidecar-%s\n' "${POD_NAME}" "${sidecar_id}"
+}
+
+validate_sidecars() {
+  local sidecar_id
+  local image
+  local env_prefix
+  local seen_sidecars=":"
+
+  for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    if ! validate_sidecar_id "${sidecar_id}"; then
+      echo "Error: Invalid SIDECARS entry: ${sidecar_id}" >&2
+      exit 1
+    fi
+    if [[ "${seen_sidecars}" == *":${sidecar_id}:"* ]]; then
+      echo "Error: Duplicate SIDECARS entry: ${sidecar_id}" >&2
+      exit 1
+    fi
+    seen_sidecars+="${sidecar_id}:"
+
+    image="$(sidecar_var_value "${sidecar_id}" IMAGE)"
+    env_prefix="$(sidecar_var_value "${sidecar_id}" ENV_PREFIX)"
+    if [ -z "${image}" ]; then
+      echo "Error: SIDECAR_${sidecar_id}_IMAGE is required." >&2
+      exit 1
+    fi
+    if [ -z "${env_prefix}" ]; then
+      echo "Error: SIDECAR_${sidecar_id}_ENV_PREFIX is required." >&2
+      exit 1
+    fi
+    if ! [[ "${env_prefix}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Error: Invalid SIDECAR_${sidecar_id}_ENV_PREFIX: ${env_prefix}" >&2
+      exit 1
+    fi
+  done
+}
+
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -762,6 +846,11 @@ ensure_workspace_record() {
   write_state_file "${state_dir}" app "${CONTAINER_NAME}"
   write_state_file "${state_dir}" fw "${FW_NAME}"
   write_state_file "${state_dir}" proxy "${PROXY_NAME}"
+  write_state_file "${state_dir}" sidecars "${SIDECARS}"
+  for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    write_state_file "${state_dir}" "sidecar_${sidecar_id}" "$(sidecar_container_name "${sidecar_id}")"
+  done
   write_optional_state_file "${state_dir}" codex_cli_version "${CODEX_LOCAL_VERSION}"
   write_optional_state_file "${state_dir}" codex_cli_latest "${CODEX_LATEST_VERSION}"
   if [ ! -f "${state_dir}/created_epoch" ]; then
@@ -909,6 +998,9 @@ print_status() {
   local state_dir="$1"
   local name
   local value
+  local sidecar_id
+  local sidecars
+  local status_sidecar_ids=()
 
   printf 'id: %s\n' "$(read_state_file "${state_dir}" seq)"
   printf 'alias: %s\n' "$(read_state_file "${state_dir}" alias)"
@@ -927,9 +1019,33 @@ print_status() {
     fi
     printf '\n'
   done
+
+  sidecars="$(read_state_file "${state_dir}" sidecars)"
+  IFS=: read -r -a status_sidecar_ids <<< "${sidecars}"
+  for sidecar_id in "${status_sidecar_ids[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    value=$(read_state_file "${state_dir}" "sidecar_${sidecar_id}")
+    printf 'sidecar %s: %s %s\n' "${sidecar_id}" "${value}" "$(workspace_state "${value}")"
+  done
 }
 
 resource_exists() {
+  local sidecar_id
+
+  for sidecar_id in "${CLEANUP_SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    if podman container exists "$(sidecar_container_name "${sidecar_id}")" 2>/dev/null; then
+      return 0
+    fi
+  done
+
+  for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    if podman container exists "$(sidecar_container_name "${sidecar_id}")" 2>/dev/null; then
+      return 0
+    fi
+  done
+
   podman container exists "${CONTAINER_NAME}" 2>/dev/null \
     || podman container exists "${FW_NAME}" 2>/dev/null \
     || podman container exists "${PROXY_NAME}" 2>/dev/null \
@@ -950,6 +1066,7 @@ firewall_running() {
 cleanup_resources() {
   local mode="${1:-graceful}"
   local app_time="1.5"
+  local sidecar_id
 
   if [ "${mode}" = "immediate" ]; then
     app_time="0"
@@ -975,6 +1092,14 @@ cleanup_resources() {
   fi
 
   podman rm --time="${app_time}" -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  for sidecar_id in "${CLEANUP_SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    podman rm --time=0 -f "$(sidecar_container_name "${sidecar_id}")" >/dev/null 2>&1 || true
+  done
+  for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    podman rm --time=0 -f "$(sidecar_container_name "${sidecar_id}")" >/dev/null 2>&1 || true
+  done
   podman rm --time=0 -f "$PROXY_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
   podman rm --time=0 -f "$INFRA_NAME" >/dev/null 2>&1 || true
@@ -1200,6 +1325,8 @@ prompt_existing_container() {
 }
 
 print_startup_summary() {
+  local sidecar_id
+
   echo "== Codex Podman Prototype =="
   echo "pod: ${POD_NAME}"
   echo "workdir: ${WORK_DIR}"
@@ -1249,6 +1376,16 @@ print_startup_summary() {
     echo "proxy socket: ${PROXY_RUNTIME_DIR_HOST}/proxy.sock -> ${PROXY_SOCKET_PATH}"
   else
     echo "proxy relay: disabled"
+  fi
+  if [ -n "${SIDECARS}" ]; then
+    echo "sidecars: ${SIDECARS}"
+    for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+      [ -n "${sidecar_id}" ] || continue
+      echo "sidecar ${sidecar_id} image: $(sidecar_var_value "${sidecar_id}" IMAGE)"
+      echo "sidecar ${sidecar_id} env prefix: $(sidecar_var_value "${sidecar_id}" ENV_PREFIX)"
+    done
+  else
+    echo "sidecars: disabled"
   fi
   if [ "${CODEX_DANGEROUS_BYPASS}" = "1" ]; then
     echo "codex policy: --dangerously-bypass-approvals-and-sandbox"
@@ -1359,6 +1496,103 @@ start_proxy() {
   }
 }
 
+start_sidecars() {
+  local sidecar_id
+  local image
+  local env_prefix
+  local run_args_value
+  local command_value
+  local container_name
+  local env_arg
+  local source_name
+  local sidecar_env_args=()
+  local sidecar_run_args=()
+  local restore_name
+  local restore_names=()
+  local restore_values=()
+  local restore_was_set=()
+  local restore_idx
+
+  for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
+    [ -n "${sidecar_id}" ] || continue
+    image="$(sidecar_var_value "${sidecar_id}" IMAGE)"
+    env_prefix="$(sidecar_var_value "${sidecar_id}" ENV_PREFIX)"
+    run_args_value="$(sidecar_var_value "${sidecar_id}" RUN_ARGS)"
+    command_value="$(sidecar_var_value "${sidecar_id}" COMMAND)"
+    container_name="$(sidecar_container_name "${sidecar_id}")"
+
+    sidecar_env_args=()
+    restore_names=()
+    restore_values=()
+    restore_was_set=()
+    while IFS= read -r source_name; do
+      [ -n "${source_name}" ] || continue
+      restore_name="${source_name#"${env_prefix}"}"
+      restore_names+=("${restore_name}")
+      if [[ -v "${restore_name}" ]]; then
+        restore_was_set+=(1)
+        restore_values+=("${!restore_name}")
+      else
+        restore_was_set+=(0)
+        restore_values+=("")
+      fi
+    done < <(compgen -v "${env_prefix}" | sort || true)
+    while IFS= read -r -d '' env_arg; do
+      sidecar_env_args+=("${env_arg}")
+    done < <(collect_prefixed_env_args "${env_prefix}")
+
+    sidecar_run_args=()
+    read -r -a sidecar_run_args <<< "${run_args_value}"
+
+    if [ -n "${command_value}" ]; then
+      podman run --name "${container_name}" -d \
+        --pod "$POD_NAME" \
+        --label "codex.workspace.path=${WORK_DIR}" \
+        --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
+        --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
+        --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+        --label "codex.workspace.role=sidecar" \
+        --label "codex.workspace.sidecar=${sidecar_id}" \
+        -e TZ="${HOST_TZ}" \
+        "${sidecar_env_args[@]}" \
+        --security-opt=no-new-privileges \
+        "${sidecar_run_args[@]}" \
+        "${image}" \
+        sh -lc "${command_value}" || {
+          echo "Error: sidecar ${sidecar_id} did not start cleanly in ${container_name}." >&2
+          exit 1
+        }
+    else
+      podman run --name "${container_name}" -d \
+        --pod "$POD_NAME" \
+        --label "codex.workspace.path=${WORK_DIR}" \
+        --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
+        --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
+        --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+        --label "codex.workspace.role=sidecar" \
+        --label "codex.workspace.sidecar=${sidecar_id}" \
+        -e TZ="${HOST_TZ}" \
+        "${sidecar_env_args[@]}" \
+        --security-opt=no-new-privileges \
+        "${sidecar_run_args[@]}" \
+        "${image}" || {
+          echo "Error: sidecar ${sidecar_id} did not start cleanly in ${container_name}." >&2
+          exit 1
+        }
+    fi
+
+    for restore_idx in "${!restore_names[@]}"; do
+      restore_name="${restore_names[restore_idx]}"
+      if [ "${restore_was_set[restore_idx]}" = "1" ]; then
+        printf -v "${restore_name}" '%s' "${restore_values[restore_idx]}"
+        export "${restore_name}"
+      else
+        unset "${restore_name}"
+      fi
+    done
+  done
+}
+
 start_new_pod() {
   ensure_workspace_record "${WORK_DIR}"
   cleanup_resources immediate
@@ -1420,6 +1654,7 @@ start_new_pod() {
 
   podman exec "$FW_NAME" firewall-reload
   start_proxy
+  start_sidecars
 
   podman run --name "$CONTAINER_NAME" -d \
     --pod "$POD_NAME" \
@@ -1577,6 +1812,17 @@ done
 if [ -z "${SELECTOR_STATE_DIR}" ] && [ -L "${REGISTRY_ROOT}/by-path-hash/${WORKSPACE_HASH}" ]; then
   SELECTOR_STATE_DIR=$(readlink -f "${REGISTRY_ROOT}/by-path-hash/${WORKSPACE_HASH}")
 fi
+
+if [ -n "${SELECTOR_STATE_DIR}" ]; then
+  state_sidecars="$(read_state_file "${SELECTOR_STATE_DIR}" sidecars)"
+  IFS=: read -r -a CLEANUP_SIDECAR_IDS_ARRAY <<< "${state_sidecars}"
+fi
+
+case "${ACTION}" in
+  start|spawn|replace|respawn)
+    validate_sidecars
+    ;;
+esac
 
 case "${ACTION}" in
   status)
