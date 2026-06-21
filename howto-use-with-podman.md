@@ -47,6 +47,19 @@ override. Override the DNF cache location with
 package downloads, while the builder layer cache is what skips unchanged DNF
 install steps.
 
+The firewall image resolver is selected before image creation:
+
+```bash
+CODEX_FIREWALL_DNS_TOOL=dig ./build-images.sh
+CODEX_FIREWALL_DNS_TOOL=kdig ./build-images.sh
+CODEX_FIREWALL_DNS_TOOL=drill ./build-images.sh
+```
+
+`dig` is the default and installs Alpine `bind-tools`. `kdig` installs
+`knot-utils`; `drill` installs the small Alpine `drill` package. The selected
+tool is baked into the firewall image as `CODEX_FIREWALL_DNS_TOOL`, and can
+still be overridden at runtime for experiments when the binary exists.
+
 This produces:
 
 - `codex`: the Fedora-based Codex runtime image

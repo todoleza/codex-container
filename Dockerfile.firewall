@@ -1,12 +1,21 @@
 FROM alpine:3.22
 
+ARG CODEX_FIREWALL_DNS_TOOL=dig
+ENV CODEX_FIREWALL_DNS_TOOL=$CODEX_FIREWALL_DNS_TOOL
+
 RUN apk add --no-cache \
     bash \
-    bind-tools \
     iproute2 \
     socat \
+    coreutils \
     nftables \
-    tzdata
+    tzdata \
+  && case "${CODEX_FIREWALL_DNS_TOOL}" in \
+    dig) apk add --no-cache bind-tools ;; \
+    kdig) apk add --no-cache knot-utils ;; \
+    drill) apk add --no-cache drill ;; \
+    *) echo "unsupported CODEX_FIREWALL_DNS_TOOL=${CODEX_FIREWALL_DNS_TOOL}" >&2; exit 1 ;; \
+  esac
 
 RUN mkdir -p /etc/codex-firewall
 

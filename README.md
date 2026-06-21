@@ -33,6 +33,11 @@ set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
 avoids repeated package downloads; the explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
 
+The firewall image installs one DNS resolver selected before image creation
+with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps
+to Alpine `bind-tools`. `kdig` maps to `knot-utils`, and `drill` maps to the
+Alpine `drill` package.
+
 More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md).
 
 ## Entry points

@@ -6,6 +6,7 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 CONTAINER_CLI="${CONTAINER_CLI:-buildah}"
 DNF_CACHE_DIR="${DNF_CACHE_DIR:-${SCRIPT_DIR}/.build-cache/dnf-fedora-44}"
 GENERATED_DOCKERFILE="${SCRIPT_DIR}/.build-cache/Dockerfile.runtime"
+CODEX_FIREWALL_DNS_TOOL="${CODEX_FIREWALL_DNS_TOOL:-dig}"
 CODEX_PACKAGE_VERSION=""
 CODEX_ARTIFACT_TYPE_FOR_BUILD=""
 CALLER_CODEX_ARTIFACT_TYPE="${CODEX_ARTIFACT_TYPE:-}"
@@ -31,6 +32,9 @@ Usage:
   build-images.sh [--batch|--non-interactive]
 
 Builds the runtime and firewall images from dist/codex.tgz.
+
+Environment:
+  CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill  DNS resolver installed into the firewall image; default dig.
 EOF
       exit 0
       ;;
@@ -62,6 +66,16 @@ case "${CONTAINER_CLI}" in
   *)
     echo "Error: unsupported CONTAINER_CLI=${CONTAINER_CLI}." >&2
     echo "Set CONTAINER_CLI=buildah or CONTAINER_CLI=podman." >&2
+    exit 1
+    ;;
+esac
+
+case "${CODEX_FIREWALL_DNS_TOOL}" in
+  dig|kdig|drill)
+    ;;
+  *)
+    echo "Error: unsupported CODEX_FIREWALL_DNS_TOOL=${CODEX_FIREWALL_DNS_TOOL}." >&2
+    echo "Set CODEX_FIREWALL_DNS_TOOL=dig, kdig, or drill." >&2
     exit 1
     ;;
 esac
@@ -226,9 +240,11 @@ runtime_build_args+=(
   --layers \
   -t codex-firewall \
   -f "./Dockerfile.firewall" \
+  --build-arg "CODEX_FIREWALL_DNS_TOOL=${CODEX_FIREWALL_DNS_TOOL}" \
   --label "org.opencontainers.image.title=codex-container-firewall" \
   --label "org.opencontainers.image.description=Alpine firewall sidecar image for codex-container" \
   --label "org.opencontainers.image.ref.name=codex-firewall" \
+  --label "codex.firewall.dns.tool=${CODEX_FIREWALL_DNS_TOOL}" \
   --label "app.kubernetes.io/name=codex-firewall" \
   --label "app.kubernetes.io/part-of=codex-container" \
   --label "app.kubernetes.io/component=firewall" \

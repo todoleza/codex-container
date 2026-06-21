@@ -11,6 +11,12 @@ else
 fi
 
 ensure_state_dir
+export CODEX_FIREWALL_DNS_TOOL
+export CODEX_FIREWALL_DNS_PARALLELISM
+export CODEX_FIREWALL_DNS_BATCH_SIZE
+export CODEX_FIREWALL_DNS_CACHE_TTL
+export CODEX_FIREWALL_DNS_TIMEOUT
+export CODEX_FIREWALL_DNS_TRIES
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
@@ -19,9 +25,25 @@ allowed_ipv4_file="${tmpdir}/allowed_ipv4.txt"
 allowed_ipv6_file="${tmpdir}/allowed_ipv6.txt"
 dns_ipv4_file="${tmpdir}/dns_ipv4.txt"
 dns_ipv6_file="${tmpdir}/dns_ipv6.txt"
+domains_sorted_file="${tmpdir}/domains.txt"
+resolved_dns_file="${tmpdir}/resolved_dns.txt"
 nft_file="${tmpdir}/rules.nft"
 
 touch "${allowed_ipv4_file}" "${allowed_ipv6_file}" "${dns_ipv4_file}" "${dns_ipv6_file}"
+
+case "${CODEX_FIREWALL_DNS_TOOL}" in
+  dig|kdig|drill)
+    if ! command -v "${CODEX_FIREWALL_DNS_TOOL}" >/dev/null 2>&1; then
+      echo "Error: CODEX_FIREWALL_DNS_TOOL=${CODEX_FIREWALL_DNS_TOOL} is not installed." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Error: unsupported CODEX_FIREWALL_DNS_TOOL=${CODEX_FIREWALL_DNS_TOOL}." >&2
+    echo "Set CODEX_FIREWALL_DNS_TOOL=dig, kdig, or drill." >&2
+    exit 1
+    ;;
+esac
 
 while IFS= read -r entry; do
   [ -n "${entry}" ] || continue
@@ -33,19 +55,130 @@ while IFS= read -r entry; do
   printf '%s\n' "${entry}" >> "${allowed_ipv6_file}"
 done < "${IPV6_FILE}"
 
-while IFS= read -r domain; do
-  [ -n "${domain}" ] || continue
+sed '/^$/d' "${DOMAINS_FILE}" | sort -u > "${domains_sorted_file}"
 
-  while IFS= read -r record; do
-    [[ "${record}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
-    printf '%s\n' "${record}" >> "${allowed_ipv4_file}"
-  done < <(dig +short A "${domain}")
+resolve_domains() {
+  local chunks_dir="${tmpdir}/dns-chunks"
 
-  while IFS= read -r record; do
-    [[ "${record}" == *:* ]] || continue
-    printf '%s\n' "${record}" >> "${allowed_ipv6_file}"
-  done < <(dig +short AAAA "${domain}")
-done < "${DOMAINS_FILE}"
+  if [ ! -s "${domains_sorted_file}" ]; then
+    : > "${resolved_dns_file}"
+    return 0
+  fi
+
+  mkdir -p "${chunks_dir}"
+  split -l "${CODEX_FIREWALL_DNS_BATCH_SIZE}" -d "${domains_sorted_file}" "${chunks_dir}/chunk-"
+
+  find "${chunks_dir}" -type f -name "chunk-*" -print0 \
+    | xargs -0 -r -P "${CODEX_FIREWALL_DNS_PARALLELISM}" -I{} bash -c '
+    set -euo pipefail
+    chunk="$1"
+    a_query="${chunk}.a"
+    aaaa_query="${chunk}.aaaa"
+    kdig_retries=0
+    if (( CODEX_FIREWALL_DNS_TRIES > 1 )); then
+      kdig_retries=$((CODEX_FIREWALL_DNS_TRIES - 1))
+    fi
+
+    query_a() {
+      case "${CODEX_FIREWALL_DNS_TOOL}" in
+        dig)
+          sed "s/$/ A/" "${chunk}" > "${a_query}"
+          dig +time="${CODEX_FIREWALL_DNS_TIMEOUT}" +tries="${CODEX_FIREWALL_DNS_TRIES}" +short -f "${a_query}" 2>/dev/null
+          ;;
+        kdig)
+          while IFS= read -r domain; do
+            printf "%s\nA\n" "${domain}"
+          done < "${chunk}" \
+            | xargs -r kdig +timeout="${CODEX_FIREWALL_DNS_TIMEOUT}" +retry="${kdig_retries}" +short 2>/dev/null
+          ;;
+        drill)
+          while IFS= read -r domain; do
+            timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" drill -Q "${domain}" A 2>/dev/null || true
+          done < "${chunk}"
+          ;;
+      esac
+    }
+
+    query_aaaa() {
+      case "${CODEX_FIREWALL_DNS_TOOL}" in
+        dig)
+          sed "s/$/ AAAA/" "${chunk}" > "${aaaa_query}"
+          dig +time="${CODEX_FIREWALL_DNS_TIMEOUT}" +tries="${CODEX_FIREWALL_DNS_TRIES}" +short -f "${aaaa_query}" 2>/dev/null
+          ;;
+        kdig)
+          while IFS= read -r domain; do
+            printf "%s\nAAAA\n" "${domain}"
+          done < "${chunk}" \
+            | xargs -r kdig +timeout="${CODEX_FIREWALL_DNS_TIMEOUT}" +retry="${kdig_retries}" +short 2>/dev/null
+          ;;
+        drill)
+          while IFS= read -r domain; do
+            timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" drill -Q "${domain}" AAAA 2>/dev/null || true
+          done < "${chunk}"
+          ;;
+      esac
+    }
+
+    query_a \
+      | while IFS= read -r record; do
+        [[ "${record}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
+        printf "4 %s\n" "${record}"
+      done || true
+
+    query_aaaa \
+      | while IFS= read -r record; do
+        [[ "${record}" == *:* ]] || continue
+        printf "6 %s\n" "${record}"
+      done || true
+  ' bash {} > "${resolved_dns_file}"
+}
+
+load_dns_cache() {
+  local cache_hash_file="${DNS_CACHE_DIR}/domains.sha256"
+  local cache_epoch_file="${DNS_CACHE_DIR}/updated_epoch"
+  local cache_ipv4_file="${DNS_CACHE_DIR}/resolved_ipv4.txt"
+  local cache_ipv6_file="${DNS_CACHE_DIR}/resolved_ipv6.txt"
+  local domains_hash
+  local cache_hash
+  local cache_epoch
+  local now
+
+  if [ "${CODEX_FIREWALL_DNS_CACHE_TTL}" = "0" ]; then
+    return 1
+  fi
+
+  [ -f "${cache_hash_file}" ] && [ -f "${cache_epoch_file}" ] && [ -f "${cache_ipv4_file}" ] && [ -f "${cache_ipv6_file}" ] || return 1
+
+  domains_hash="$(sha256sum "${domains_sorted_file}" | awk '{print $1}')"
+  cache_hash="$(sed -n '1p' "${cache_hash_file}")"
+  [ "${domains_hash}" = "${cache_hash}" ] || return 1
+
+  cache_epoch="$(sed -n '1p' "${cache_epoch_file}")"
+  [[ "${cache_epoch}" =~ ^[0-9]+$ ]] || return 1
+  now="$(date +%s)"
+  if (( now - cache_epoch > CODEX_FIREWALL_DNS_CACHE_TTL )); then
+    return 1
+  fi
+
+  cat "${cache_ipv4_file}" >> "${allowed_ipv4_file}"
+  cat "${cache_ipv6_file}" >> "${allowed_ipv6_file}"
+  return 0
+}
+
+write_dns_cache() {
+  mkdir -p "${DNS_CACHE_DIR}"
+  sha256sum "${domains_sorted_file}" | awk '{print $1}' > "${DNS_CACHE_DIR}/domains.sha256"
+  awk '$1 == "4" { print $2 }' "${resolved_dns_file}" | sort -u > "${DNS_CACHE_DIR}/resolved_ipv4.txt"
+  awk '$1 == "6" { print $2 }' "${resolved_dns_file}" | sort -u > "${DNS_CACHE_DIR}/resolved_ipv6.txt"
+  date +%s > "${DNS_CACHE_DIR}/updated_epoch"
+}
+
+if ! load_dns_cache; then
+  resolve_domains
+  write_dns_cache
+  awk '$1 == "4" { print $2 }' "${resolved_dns_file}" >> "${allowed_ipv4_file}"
+  awk '$1 == "6" { print $2 }' "${resolved_dns_file}" >> "${allowed_ipv6_file}"
+fi
 
 while IFS= read -r resolver; do
   [ -n "${resolver}" ] || continue
