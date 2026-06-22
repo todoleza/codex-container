@@ -38,6 +38,7 @@ EOF_META
 
 cat > "${fakebin}/curl" <<'FAKE_CURL'
 #!/bin/sh
+printf '%s\n' "$*" >> "${CURL_LOG}"
 case "$*" in
   *"/releases/latest"*)
     printf '%s\n' '{"tag_name":"rust-v0.141.0","name":"0.141.0","prerelease":false,"assets":[{"name":"codex-npm-0.141.0.tgz","browser_download_url":"https://download.example/codex-npm-0.141.0.tgz"}]}'
@@ -59,11 +60,13 @@ chmod 755 "${fakebin}/curl" "${fakebin}/buildah" "${repo}/build-images.sh" "${re
 export PATH="${fakebin}:${PATH}"
 export CODEX_CURL="${fakebin}/curl"
 export BUILDAH_LOG="${tmpdir}/buildah.log"
+export CURL_LOG="${tmpdir}/curl.log"
 
 if (cd "${repo}" && CODEX_CONTAINER_BATCH=1 ./build-images.sh >"${tmpdir}/batch.out" 2>"${tmpdir}/batch.err"); then
   echo "batch stale build should fail by default" >&2
   exit 1
 fi
+grep -Fq -- '--max-time 1' "${CURL_LOG}"
 grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/batch.err"
 test ! -f "${BUILDAH_LOG}"
 

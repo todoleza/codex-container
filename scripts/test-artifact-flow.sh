@@ -28,14 +28,17 @@ cat > "${fakebin}/curl" <<'FAKE_CURL'
 set -eu
 
 output=""
+printf '%s\n' "$*" >> "${CURL_LOG}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o)
       output="$2"
       shift 2
       ;;
-    -f|-L|-fL|-fsSL|-H)
+    -f|-L|-fL|-fsSL|-H|--max-time)
       if [ "$1" = "-H" ]; then
+        shift 2
+      elif [ "$1" = "--max-time" ]; then
         shift 2
       else
         shift
@@ -62,8 +65,8 @@ case "${url}" in
   */releases/latest)
     printf '%s\n' '{"tag_name":"rust-v0.141.0","name":"0.141.0","prerelease":false,"assets":[{"name":"codex-npm-0.141.0.tgz","browser_download_url":"https://download.example/codex-npm-0.141.0.tgz"}]}'
     ;;
-  */releases?per_page=100)
-    printf '%s\n' '[{"tag_name":"rust-v0.142.0-alpha.7","name":"0.142.0-alpha.7","prerelease":true,"published_at":"2026-06-20T00:40:41Z","assets":[{"name":"codex-npm-0.142.0-alpha.7.tgz","browser_download_url":"https://download.example/codex-npm-0.142.0-alpha.7.tgz"}]},{"tag_name":"rust-v0.142.0-alpha.9","name":"0.142.0-alpha.9","prerelease":true,"published_at":"2026-06-21T06:42:25Z","assets":[{"name":"codex-npm-0.142.0-alpha.9.tgz","browser_download_url":"https://download.example/codex-npm-0.142.0-alpha.9.tgz"}]}]'
+  */releases?per_page=10\&page=1)
+    printf '%s\n' '[{"tag_name":"rust-v0.142.0-alpha.9","name":"0.142.0-alpha.9","prerelease":true,"published_at":"2026-06-21T06:42:25Z","assets":[{"name":"codex-npm-0.142.0-alpha.9.tgz","browser_download_url":"https://download.example/codex-npm-0.142.0-alpha.9.tgz"}]},{"tag_name":"rust-v0.142.0-alpha.7","name":"0.142.0-alpha.7","prerelease":true,"published_at":"2026-06-20T00:40:41Z","assets":[{"name":"codex-npm-0.142.0-alpha.7.tgz","browser_download_url":"https://download.example/codex-npm-0.142.0-alpha.7.tgz"}]}]'
     ;;
   */releases/tags/rust-v0.142.0-alpha.7)
     printf '%s\n' '{"tag_name":"rust-v0.142.0-alpha.7","name":"0.142.0-alpha.7","prerelease":true,"assets":[{"name":"codex-npm-0.142.0-alpha.7.tgz","browser_download_url":"https://download.example/codex-npm-0.142.0-alpha.7.tgz"}]}'
@@ -81,6 +84,7 @@ export FIXTURES="${fixtures}"
 export CODEX_CURL="${fakebin}/curl"
 export DIST_DIR="${dist_dir}"
 export UPSTREAM_CACHE_DIR="${cache_dir}"
+export CURL_LOG="${tmpdir}/curl.log"
 
 "${repo_root}/codex-artifact.sh" prepare > "${tmpdir}/release.out"
 grep -Fq 'staged Codex 0.141.0 from rust-v0.141.0' "${tmpdir}/release.out"
@@ -101,6 +105,7 @@ grep -Fxq 'CODEX_ARTIFACT_TYPE=alpha' "${dist_dir}/codex-artifact.env"
 grep -Fxq 'CODEX_ARTIFACT_VERSION=0.142.0-alpha.7' "${dist_dir}/codex-artifact.env"
 
 "${repo_root}/codex-artifact.sh" status > "${tmpdir}/status.out"
+grep -Fq -- '--max-time 2' "${CURL_LOG}"
 grep -Fq 'staged version: 0.142.0-alpha.7' "${tmpdir}/status.out"
 grep -Fq 'latest release: 0.141.0' "${tmpdir}/status.out"
 grep -Fq 'latest alpha: 0.142.0-alpha.9' "${tmpdir}/status.out"

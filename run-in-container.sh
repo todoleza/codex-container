@@ -142,6 +142,58 @@ refresh_app_work_dir() {
   fi
 }
 
+append_unique_word() {
+  local value="$1"
+  local existing
+
+  for existing in ${CODEX_EXTRA_ADD_DIRS}; do
+    if [ "${existing}" = "${value}" ]; then
+      return
+    fi
+  done
+
+  CODEX_EXTRA_ADD_DIRS+=" ${value}"
+}
+
+prepare_git_metadata_mounts() {
+  local git_common_dir
+  local git_abs_dir
+  local git_dir
+  local mounted_dir
+  local skip_git_dir
+  local mounted=()
+
+  APP_GIT_VOLUME_ARGS_ARRAY=()
+  CODEX_EXTRA_ADD_DIRS=""
+
+  if ! git_common_dir="$(git -C "${APP_WORK_DIR}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+    return
+  fi
+  git_abs_dir="$(git -C "${APP_WORK_DIR}" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null || true)"
+
+  for git_dir in "${git_common_dir}" "${git_abs_dir}"; do
+    [ -n "${git_dir}" ] || continue
+    [ -e "${git_dir}" ] || continue
+    skip_git_dir=0
+    for mounted_dir in "${mounted[@]}"; do
+      if [[ "${git_dir}" = "${mounted_dir}" || "${git_dir}" = "${mounted_dir}/"* ]]; then
+        skip_git_dir=1
+        break
+      fi
+    done
+    if [ "${skip_git_dir}" = "1" ]; then
+      continue
+    fi
+    mounted+=("${git_dir}")
+    if [[ "${git_dir}" != "${WORK_DIR}" && "${git_dir}" != "${WORK_DIR}/"* ]]; then
+      APP_GIT_VOLUME_ARGS_ARRAY+=(-v "${git_dir}:${git_dir}:z")
+      append_unique_word "${git_dir}"
+    else
+      append_unique_word "/app${git_dir}"
+    fi
+  done
+}
+
 EARLY_WORK_DIR="$(resolve_workspace_root "$(detect_requested_work_dir "$@")")"
 : "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
 : "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
@@ -258,9 +310,11 @@ OPENAI_ALLOWED_DOMAINS="$(printf '%s\n' "${FINAL_ALLOWED_DOMAINS[@]}" | sort -u 
 PROXY_VOLUME_ARGS_ARRAY=()
 FIREWALL_POLICY_VOLUME_ARGS_ARRAY=()
 APP_POLICY_VOLUME_ARGS_ARRAY=()
+APP_GIT_VOLUME_ARGS_ARRAY=()
 CODEX_APP_ENV_ARGS_ARRAY=()
 SIDECAR_IDS_ARRAY=()
 CLEANUP_SIDECAR_IDS_ARRAY=()
+CODEX_EXTRA_ADD_DIRS=""
 ACTION="start"
 ACTION_ARGS=()
 START_ARGS=()
@@ -1697,6 +1751,7 @@ start_new_pod() {
   if proxy_enabled; then
     PROXY_VOLUME_ARGS_ARRAY=(-v "${PROXY_RUNTIME_DIR_HOST}:${PROXY_RUNTIME_DIR}:z")
   fi
+  prepare_git_metadata_mounts
   FIREWALL_POLICY_VOLUME_ARGS_ARRAY=(-v "${FIREWALL_POLICY_RUNTIME_DIR_HOST}:/etc/codex-firewall:z")
   APP_POLICY_VOLUME_ARGS_ARRAY=(-v "${FIREWALL_POLICY_RUNTIME_DIR_HOST}:${CODEX_FIREWALL_POLICY_DIR}:ro,z")
 
@@ -1767,12 +1822,14 @@ start_new_pod() {
     -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
     -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
     -e CODEX_FIREWALL_POLICY_DIR="${CODEX_FIREWALL_POLICY_DIR}" \
+    -e CODEX_EXTRA_ADD_DIRS="${CODEX_EXTRA_ADD_DIRS}" \
     "${CODEX_APP_ENV_ARGS_ARRAY[@]}" \
     --cap-drop=ALL \
     --security-opt=no-new-privileges \
     --user "$(id -u):$(id -g)" \
     -v "$HOME/.codex:/home/node/.codex:z" \
     -v "$WORK_DIR:/app$WORK_DIR" \
+    "${APP_GIT_VOLUME_ARGS_ARRAY[@]}" \
     "${APP_POLICY_VOLUME_ARGS_ARRAY[@]}" \
     "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \
     "${CONTAINER_IMAGE}" \

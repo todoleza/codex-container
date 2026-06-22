@@ -168,7 +168,7 @@ check_staged_freshness() {
   local policy="${CODEX_ARTIFACT_STALE_POLICY:-}"
   local choice=""
 
-  latest_version="$(latest_version_for_type "${CODEX_ARTIFACT_TYPE_FOR_BUILD}" 2>/dev/null || true)"
+  latest_version="$(CODEX_CURL_MAX_TIME="${CODEX_ARTIFACT_BUILD_TIMEOUT}" latest_version_for_type "${CODEX_ARTIFACT_TYPE_FOR_BUILD}" 2>/dev/null || true)"
   if [ -z "${latest_version}" ]; then
     echo "Warning: could not check latest Codex ${CODEX_ARTIFACT_TYPE_FOR_BUILD} version." >&2
     return 0

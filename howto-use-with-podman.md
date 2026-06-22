@@ -26,15 +26,22 @@ Artifact commands:
 
 The default artifact type is `release`, which selects the latest non-prerelease
 GitHub release. `type alpha` selects the latest upstream alpha prerelease.
-`version VERSION` selects the exact `rust-v<VERSION>` GitHub tag.
+GitHub does not provide a `/releases/latest` equivalent for prereleases, so the
+alpha lookup uses the releases list endpoint in small pages and stops at the
+first matching alpha prerelease. `version VERSION` selects the exact
+`rust-v<VERSION>` GitHub tag.
 
 `codex-artifact.sh status` prints the staged artifact plus latest release and
-latest alpha status in one report. `build-images.sh` checks whether the staged
-artifact is older than the latest upstream version for its artifact type. In an
-interactive terminal it asks whether to refresh, continue, or abort. In batch
-mode it does not prompt and fails by default. Batch mode is enabled by either
-`--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`, `INTERACTIVE=0`, or
-non-TTY stdin. Override stale handling with
+latest alpha status in one report. Upstream status checks use a 2 second curl
+timeout by default; override it with `CODEX_ARTIFACT_STATUS_TIMEOUT=SECONDS`.
+`build-images.sh` checks whether the staged artifact is older than the latest
+upstream version for its artifact type with a 1 second curl timeout; override it
+with `CODEX_ARTIFACT_BUILD_TIMEOUT=SECONDS`. If the build-time check cannot
+complete, the build continues with a warning. If the staged artifact is known to
+be stale, an interactive terminal asks whether to refresh, continue, or abort.
+In batch mode it does not prompt and fails by default. Batch mode is enabled by
+either `--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`,
+`INTERACTIVE=0`, or non-TTY stdin. Override stale handling with
 `CODEX_ARTIFACT_STALE_POLICY=continue|refresh|fail`.
 
 The runtime build is generated from `Dockerfile.in`. Sorted
@@ -103,7 +110,7 @@ The launcher:
 - programs IPv4 and IPv6 egress rules with `nftables`
 - starts an unprivileged Codex container in the same pod network namespace
 - propagates the workstation timezone into both containers via `TZ`, falling back to `UTC` if detection fails
-- propagates `CODEX_WORKDIR`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_DANGEROUS_BYPASS` into the app container
+- propagates `CODEX_WORKDIR`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, `CODEX_DANGEROUS_BYPASS`, and launcher-computed `CODEX_EXTRA_ADD_DIRS` into the app container
 - mounts the live firewall policy into the app container read-only and exposes it through `codex-firewall-policy`
 - loads optional env files before applying launcher defaults
 - snapshots the launcher into the runtime directory for long-lived or mutating commands
@@ -112,8 +119,10 @@ The launcher:
 
 The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
 process started inside the app container gets the propagated sandbox and
-approval defaults unless the command line already sets them. The image also
-installs a shell profile hook that changes interactive shells into
+approval defaults unless the command line already sets them. For linked Git
+worktrees, the launcher mounts the shared Git metadata and the wrapper passes it
+to Codex with `--add-dir` unless the command line already supplies `--add-dir`.
+The image also installs a shell profile hook that changes interactive shells into
 the preserved `/app<host-path>` mount, so Codex sees a stable absolute path.
 
 The launcher parses `--wd` and `--id` as its own dash options. Other dash
@@ -266,6 +275,13 @@ a missing child workspace state. This keeps invocations from subdirectories
 attached to the same parent workspace pod. The parent workspace remains the
 mounted root, while app sessions start in the originally requested subdirectory
 when it is inside that workspace.
+
+For linked Git worktrees, the launcher also mounts the worktree's shared Git
+metadata into the app container at the absolute path recorded by the `.git`
+pointer file. The same Git metadata path is exposed to the inner Codex sandbox
+through `CODEX_EXTRA_ADD_DIRS`, which the runtime wrapper turns into `--add-dir`
+flags for `codex`. This fixes `git status`, `git add`, and related commands from
+subdirectories without switching the whole session to `danger-full-access`.
 
 The load order is:
 

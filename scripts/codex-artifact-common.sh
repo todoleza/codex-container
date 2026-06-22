@@ -7,6 +7,10 @@ CODEX_ARTIFACT_TYPE="${CODEX_ARTIFACT_TYPE:-release}"
 CODEX_ARTIFACT_STALE_POLICY="${CODEX_ARTIFACT_STALE_POLICY:-}"
 CODEX_CONTAINER_BATCH="${CODEX_CONTAINER_BATCH:-0}"
 CODEX_CURL="${CODEX_CURL:-curl}"
+CODEX_ARTIFACT_RELEASE_PAGE_SIZE="${CODEX_ARTIFACT_RELEASE_PAGE_SIZE:-10}"
+CODEX_ARTIFACT_RELEASE_MAX_PAGES="${CODEX_ARTIFACT_RELEASE_MAX_PAGES:-10}"
+CODEX_ARTIFACT_STATUS_TIMEOUT="${CODEX_ARTIFACT_STATUS_TIMEOUT:-2}"
+CODEX_ARTIFACT_BUILD_TIMEOUT="${CODEX_ARTIFACT_BUILD_TIMEOUT:-1}"
 
 artifact_repo_root() {
   local source="${BASH_SOURCE[0]}"
@@ -56,9 +60,13 @@ package_version() {
 
 github_get() {
   local path="$1"
-  "${CODEX_CURL}" -fsSL \
-    -H 'Accept: application/vnd.github+json' \
-    "${CODEX_GITHUB_API_URL}${path}"
+  local curl_args=(-fsSL -H 'Accept: application/vnd.github+json')
+
+  if [ -n "${CODEX_CURL_MAX_TIME:-}" ]; then
+    curl_args+=(--max-time "${CODEX_CURL_MAX_TIME}")
+  fi
+
+  "${CODEX_CURL}" "${curl_args[@]}" "${CODEX_GITHUB_API_URL}${path}"
 }
 
 release_version_from_tag() {
@@ -73,8 +81,28 @@ select_latest_release_json() {
 }
 
 select_latest_alpha_json() {
-  github_get '/releases?per_page=100' \
-    | jq -c '[.[] | select(.prerelease == true) | select((.tag_name | test("-alpha\\.")) or (.name | test("-alpha\\.")))] | sort_by(.published_at) | last'
+  local page=1
+  local release_json
+  local match
+  local release_count
+
+  while [ "${page}" -le "${CODEX_ARTIFACT_RELEASE_MAX_PAGES}" ]; do
+    release_json="$(github_get "/releases?per_page=${CODEX_ARTIFACT_RELEASE_PAGE_SIZE}&page=${page}")"
+    match="$(printf '%s\n' "${release_json}" \
+      | jq -c '[.[] | select(.prerelease == true) | select((.tag_name | test("-alpha\\.")) or (.name | test("-alpha\\.")))] | first // empty')"
+    if [ -n "${match}" ] && [ "${match}" != "null" ]; then
+      printf '%s\n' "${match}"
+      return 0
+    fi
+
+    release_count="$(printf '%s\n' "${release_json}" | jq -r 'length')"
+    if [ "${release_count}" -lt "${CODEX_ARTIFACT_RELEASE_PAGE_SIZE}" ]; then
+      break
+    fi
+    page=$((page + 1))
+  done
+
+  printf 'null\n'
 }
 
 select_exact_release_json() {
@@ -253,8 +281,8 @@ artifact_status() {
   fi
   metadata_version="$(metadata_get CODEX_ARTIFACT_VERSION || true)"
   metadata_type="$(metadata_get CODEX_ARTIFACT_TYPE || true)"
-  latest_release="$(latest_version_for_type release)"
-  latest_alpha="$(latest_version_for_type alpha)"
+  latest_release="$(CODEX_CURL_MAX_TIME="${CODEX_ARTIFACT_STATUS_TIMEOUT}" latest_version_for_type release 2>/dev/null || true)"
+  latest_alpha="$(CODEX_CURL_MAX_TIME="${CODEX_ARTIFACT_STATUS_TIMEOUT}" latest_version_for_type alpha 2>/dev/null || true)"
 
   printf 'artifact: %s\n' "${STAGED_ARTIFACT}"
   printf 'metadata: %s\n' "${ARTIFACT_METADATA}"

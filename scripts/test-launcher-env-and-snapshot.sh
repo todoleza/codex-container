@@ -141,6 +141,13 @@ grep -Fq "workdir: ${tmpdir}/gitroot" "${tmpdir}/nested-git.out"
 grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/gitroot/subdir" "${PODMAN_LOG}"
 grep -Fq -- "-v ${tmpdir}/gitroot:/app${tmpdir}/gitroot" "${PODMAN_LOG}"
 
+git -C "${tmpdir}/gitroot" worktree add -q "${tmpdir}/linked-worktree"
+: > "${PODMAN_LOG}"
+"${repo_root}/run-in-container.sh" --wd "${tmpdir}/linked-worktree" spawn > "${tmpdir}/linked-worktree.out"
+grep -Fq -- "-v ${tmpdir}/gitroot/.git:${tmpdir}/gitroot/.git:z" "${PODMAN_LOG}"
+grep -Fq -- "-e CODEX_EXTRA_ADD_DIRS=" "${PODMAN_LOG}"
+grep -Fq -- "${tmpdir}/gitroot/.git" "${PODMAN_LOG}"
+
 mkdir -p "${tmpdir}/orphan/main"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan/main" spawn > "${tmpdir}/orphan-child.out"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan" spawn > "${tmpdir}/orphan-parent.out"

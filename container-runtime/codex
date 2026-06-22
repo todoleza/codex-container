@@ -5,6 +5,7 @@ REAL_CODEX_BIN="${CODEX_REAL_BIN:-/usr/local/share/npm-global/bin/codex}"
 SANDBOX_MODE="${CODEX_SANDBOX_MODE:-danger-full-access}"
 APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
 DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS:-0}"
+EXTRA_ADD_DIRS="${CODEX_EXTRA_ADD_DIRS:-}"
 
 has_arg() {
   local wanted="$1"
@@ -37,6 +38,13 @@ else
   fi
   if ! has_arg "--ask-for-approval" "$@"; then
     default_flags+=(--ask-for-approval "${APPROVAL_POLICY}")
+  fi
+  if ! has_arg "--add-dir" "$@"; then
+    read -r -a extra_add_dirs_array <<< "${EXTRA_ADD_DIRS}"
+    for add_dir in "${extra_add_dirs_array[@]}"; do
+      [ -n "${add_dir}" ] || continue
+      default_flags+=(--add-dir "${add_dir}")
+    done
   fi
 fi
 
