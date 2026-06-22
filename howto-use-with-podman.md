@@ -260,8 +260,12 @@ The launcher resolves the workspace path before loading the workspace env file.
 If the requested directory is inside a Git worktree, the workspace is the Git
 top-level directory. Outside Git, the launcher walks upward to the nearest
 parent containing `.codex-container.env`; if none is found, it uses the
-requested directory as-is. This keeps invocations from subdirectories attached
-to the same parent workspace pod.
+requested directory as-is. When no marker identifies the parent, implicit
+workspace selection still prefers the longest running registered ancestor over
+a missing child workspace state. This keeps invocations from subdirectories
+attached to the same parent workspace pod. The parent workspace remains the
+mounted root, while app sessions start in the originally requested subdirectory
+when it is inside that workspace.
 
 The load order is:
 

@@ -15,6 +15,10 @@ printf '%s\n' "$*" >> "${PODMAN_LOG}"
 case "$1" in
   container)
     if [ "$2" = "exists" ]; then
+      if [ -n "${FAKE_RUNNING_APP:-}" ]; then
+        [ "$3" = "${FAKE_RUNNING_APP}" ] && exit 0
+        exit 1
+      fi
       case "${FAKE_APP_EXISTS:-0}:$3" in
         1:*-app) exit 0 ;;
         *) exit 1 ;;
@@ -26,6 +30,10 @@ case "$1" in
       printf '%s\n' "${FAKE_IMAGE_CODEX_VERSION:-}"
       exit 0
     fi
+    [ "$2" = "--format" ] && [ "$3" = "{{.State.Running}}" ] && [ -n "${FAKE_RUNNING_APP:-}" ] && {
+      [ "$4" = "${FAKE_RUNNING_APP}" ] && printf 'true\n' || printf 'false\n'
+      exit 0
+    }
     [ "$2" = "--format" ] && [ "$3" = "{{.State.Running}}" ] && [ "${FAKE_APP_EXISTS:-0}" = "1" ] && {
       printf 'true\n'
       exit 0
@@ -123,15 +131,30 @@ grep -Fq '0.222.0' "${workspace_state_dir}/codex_cli_latest"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work/subdir" spawn > "${tmpdir}/nested-env.out"
 grep -Fq "workdir: ${tmpdir}/work" "${tmpdir}/nested-env.out"
 grep -Fq "loaded env files: ${tmpdir}/home/.local/share/codex-container/env ${tmpdir}/work/.codex-container.env ${tmpdir}/extra.env" "${tmpdir}/nested-env.out"
-grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/work" "${PODMAN_LOG}"
+grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/work/subdir" "${PODMAN_LOG}"
 grep -Fq -- "-v ${tmpdir}/work:/app${tmpdir}/work" "${PODMAN_LOG}"
 
 git -C "${tmpdir}/gitroot" init -q
 : > "${PODMAN_LOG}"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/gitroot/subdir" spawn > "${tmpdir}/nested-git.out"
 grep -Fq "workdir: ${tmpdir}/gitroot" "${tmpdir}/nested-git.out"
-grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/gitroot" "${PODMAN_LOG}"
+grep -Fq -- "-e CODEX_WORKDIR=/app${tmpdir}/gitroot/subdir" "${PODMAN_LOG}"
 grep -Fq -- "-v ${tmpdir}/gitroot:/app${tmpdir}/gitroot" "${PODMAN_LOG}"
+
+mkdir -p "${tmpdir}/orphan/main"
+"${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan/main" spawn > "${tmpdir}/orphan-child.out"
+"${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan" spawn > "${tmpdir}/orphan-parent.out"
+orphan_hash="$(printf '%s' "${tmpdir}/orphan" | sha256sum | cut -c1-8)"
+orphan_app="codex-orphan-${orphan_hash}-app"
+
+: > "${PODMAN_LOG}"
+FAKE_RUNNING_APP="${orphan_app}" "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan/main" status > "${tmpdir}/orphan-status.out"
+grep -Fq "path: ${tmpdir}/orphan" "${tmpdir}/orphan-status.out"
+grep -Fq "app: ${orphan_app} running" "${tmpdir}/orphan-status.out"
+
+: > "${PODMAN_LOG}"
+FAKE_RUNNING_APP="${orphan_app}" "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan/main" > "${tmpdir}/orphan-start.out"
+grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/orphan/main ${orphan_app} bash" "${PODMAN_LOG}"
 
 : > "${PODMAN_LOG}"
 FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --id 1 enter env > "${tmpdir}/enter.out"
@@ -139,7 +162,7 @@ grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work codex-work-" "${PO
 
 : > "${PODMAN_LOG}"
 FAKE_APP_EXISTS=1 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work/subdir" > "${tmpdir}/nested-start.out"
-grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work codex-work-" "${PODMAN_LOG}"
+grep -Fq -- "exec -i -t -e SECRET_TOKEN -w /app${tmpdir}/work/subdir codex-work-" "${PODMAN_LOG}"
 grep -Fq -- " bash" "${PODMAN_LOG}"
 if grep -Fq "already running" "${tmpdir}/nested-start.out"; then
   echo "nested start should enter parent session without prompting" >&2

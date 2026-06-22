@@ -116,6 +116,32 @@ resolve_workspace_root() {
   printf '%s\n' "${dir}"
 }
 
+refresh_workspace_runtime_names() {
+  WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
+  WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
+  POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
+  INFRA_NAME="${POD_NAME}-infra"
+  FW_NAME="${POD_NAME}-fw"
+  PROXY_NAME="${POD_NAME}-proxy"
+  CONTAINER_NAME="${POD_NAME}-app"
+  HOST_TZ=$(detect_host_tz)
+  DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
+  if ! caller_env_has PROXY_RUNTIME_DIR_HOST; then
+    PROXY_RUNTIME_DIR_HOST="${DEFAULT_PROXY_RUNTIME_DIR_HOST}"
+  fi
+  DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-policy"
+  if ! caller_env_has FIREWALL_POLICY_RUNTIME_DIR_HOST; then
+    FIREWALL_POLICY_RUNTIME_DIR_HOST="${DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST}"
+  fi
+}
+
+refresh_app_work_dir() {
+  APP_WORK_DIR="${WORK_DIR}"
+  if [[ "${REQUESTED_WORK_DIR:-}" = "${WORK_DIR}" || "${REQUESTED_WORK_DIR:-}" = "${WORK_DIR}/"* ]]; then
+    APP_WORK_DIR="${REQUESTED_WORK_DIR}"
+  fi
+}
+
 EARLY_WORK_DIR="$(resolve_workspace_root "$(detect_requested_work_dir "$@")")"
 : "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
 : "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
@@ -981,6 +1007,45 @@ workspace_state() {
   fi
 }
 
+resolve_running_ancestor_state() {
+  local target_path
+  local entry
+  local path
+  local app
+  local best_entry=""
+  local best_len=0
+
+  target_path="$(realpath -m "$1")"
+
+  registry_init
+  shopt -s nullglob
+  for entry in "${REGISTRY_ROOT}/state/"*; do
+    path="$(read_state_file "${entry}" path)"
+    app="$(read_state_file "${entry}" app)"
+    [ -n "${path}" ] || continue
+    [ -n "${app}" ] || continue
+
+    if [[ "${target_path}" != "${path}" && "${target_path}" != "${path}/"* ]]; then
+      continue
+    fi
+    if [ "$(workspace_state "${app}")" != "running" ]; then
+      continue
+    fi
+    if (( ${#path} > best_len )); then
+      best_entry="${entry}"
+      best_len="${#path}"
+    fi
+  done
+  shopt -u nullglob
+
+  if [ -n "${best_entry}" ]; then
+    printf '%s\n' "${best_entry}"
+    return 0
+  fi
+
+  return 1
+}
+
 workspace_started() {
   local name="$1"
   local fallback="$2"
@@ -1145,7 +1210,7 @@ exec_in_app() {
     exec_args+=(-t)
   fi
 
-  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "/app${WORK_DIR}" "${CONTAINER_NAME}" "$@"
+  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "/app${APP_WORK_DIR}" "${CONTAINER_NAME}" "$@"
 }
 
 exec_in_app_root() {
@@ -1178,7 +1243,7 @@ exec_shell_action() {
 
   if ! app_running; then
     echo "Error: ${CONTAINER_NAME} is not running." >&2
-    echo "Start it first with: $0 --wd ${WORK_DIR}" >&2
+    echo "Start it first with: $0 --wd ${APP_WORK_DIR}" >&2
     exit 1
   fi
 
@@ -1202,7 +1267,7 @@ exec_root_shell_action() {
 
   if ! app_running; then
     echo "Error: ${CONTAINER_NAME} is not running." >&2
-    echo "Start it first with: $0 --wd ${WORK_DIR}" >&2
+    echo "Start it first with: $0 --wd ${APP_WORK_DIR}" >&2
     exit 1
   fi
 
@@ -1226,7 +1291,7 @@ exec_firewall_action() {
 
   if ! firewall_running; then
     echo "Error: ${FW_NAME} is not running." >&2
-    echo "Start it first with: $0 --wd ${WORK_DIR} spawn" >&2
+    echo "Start it first with: $0 --wd ${APP_WORK_DIR} spawn" >&2
     exit 1
   fi
 
@@ -1269,7 +1334,7 @@ container_copy_path() {
 
   case "${path}" in
     /*) printf '%s\n' "${path}" ;;
-    *) printf '/app%s/%s\n' "${WORK_DIR}" "${path}" ;;
+    *) printf '/app%s/%s\n' "${APP_WORK_DIR}" "${path}" ;;
   esac
 }
 
@@ -1697,7 +1762,7 @@ start_new_pod() {
     "${CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
     -e OPENAI_API_KEY \
     -e TZ="${HOST_TZ}" \
-    -e CODEX_WORKDIR="/app${WORK_DIR}" \
+    -e CODEX_WORKDIR="/app${APP_WORK_DIR}" \
     -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
     -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
     -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
@@ -1753,20 +1818,11 @@ if [ -n "${SELECTOR_ID}" ] && [ "${WORK_DIR_SELECTED}" = "0" ]; then
   WORK_DIR=$(read_state_file "${SELECTOR_STATE_DIR}" path)
 fi
 
+REQUESTED_WORK_DIR="$(realpath -m "$WORK_DIR")"
 WORK_DIR=$(resolve_workspace_root "$WORK_DIR")
 load_selected_workspace_env_if_needed
-WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
-WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
-POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
-INFRA_NAME="${POD_NAME}-infra"
-FW_NAME="${POD_NAME}-fw"
-PROXY_NAME="${POD_NAME}-proxy"
-CONTAINER_NAME="${POD_NAME}-app"
-HOST_TZ=$(detect_host_tz)
-DEFAULT_PROXY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-proxy"
-: "${PROXY_RUNTIME_DIR_HOST:=${DEFAULT_PROXY_RUNTIME_DIR_HOST}}"
-DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST="${RUNTIME_BASE_DIR}/${POD_NAME}-policy"
-: "${FIREWALL_POLICY_RUNTIME_DIR_HOST:=${DEFAULT_FIREWALL_POLICY_RUNTIME_DIR_HOST}}"
+refresh_workspace_runtime_names
+refresh_app_work_dir
 
 if [ -z "$WORK_DIR" ]; then
   echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
@@ -1841,6 +1897,19 @@ done
 
 if [ -z "${SELECTOR_STATE_DIR}" ] && [ -L "${REGISTRY_ROOT}/by-path-hash/${WORKSPACE_HASH}" ]; then
   SELECTOR_STATE_DIR=$(readlink -f "${REGISTRY_ROOT}/by-path-hash/${WORKSPACE_HASH}")
+fi
+
+if [ -z "${SELECTOR_ID}" ]; then
+  ancestor_state_dir="$(resolve_running_ancestor_state "${REQUESTED_WORK_DIR}" || true)"
+  if [ -n "${ancestor_state_dir}" ]; then
+    if [ -z "${SELECTOR_STATE_DIR}" ] || [ "$(workspace_state "$(read_state_file "${SELECTOR_STATE_DIR}" app)")" != "running" ]; then
+      SELECTOR_STATE_DIR="${ancestor_state_dir}"
+      WORK_DIR="$(read_state_file "${SELECTOR_STATE_DIR}" path)"
+      load_selected_workspace_env_if_needed
+      refresh_workspace_runtime_names
+      refresh_app_work_dir
+    fi
+  fi
 fi
 
 if [ -n "${SELECTOR_STATE_DIR}" ]; then
