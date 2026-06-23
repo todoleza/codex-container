@@ -7,7 +7,7 @@ trap 'rm -rf "${tmpdir}"' EXIT
 
 repo="${tmpdir}/repo"
 fakebin="${tmpdir}/bin"
-mkdir -p "${repo}/scripts" "${repo}/container-deps" "${repo}/dist" "${fakebin}" "${tmpdir}/pkg/package"
+mkdir -p "${repo}/scripts" "${repo}/container-deps" "${repo}/container-collections" "${repo}/dist" "${fakebin}" "${tmpdir}/pkg/package"
 
 cp "${source_root}/build-images.sh" "${repo}/build-images.sh"
 cp "${source_root}/scripts/codex-artifact-common.sh" "${repo}/scripts/codex-artifact-common.sh"
@@ -15,6 +15,7 @@ cp "${source_root}/scripts/codex-artifact-common.sh" "${repo}/scripts/codex-arti
 cat > "${repo}/Dockerfile.in" <<'EOF_DOCKER'
 FROM scratch
 # DNF_DROPINS
+# ANSIBLE_COLLECTION_DROPINS
 COPY dist/codex.tgz codex.tgz
 EOF_DOCKER
 
@@ -23,6 +24,11 @@ FROM scratch
 EOF_FIREWALL
 
 printf 'bash\n' > "${repo}/container-deps/10-base.dnf"
+cat > "${repo}/container-collections/10-example.yml" <<'EOF_COLLECTION'
+- name: https://github.com/example/example.collection.git
+  type: git
+  version: main
+EOF_COLLECTION
 printf '{"name":"@openai/codex","version":"0.140.0"}\n' > "${tmpdir}/pkg/package/package.json"
 tar -C "${tmpdir}/pkg" -czf "${repo}/dist/codex.tgz" package/package.json
 
@@ -80,6 +86,8 @@ grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/noninteractive.err"
 grep -Fq 'bud --layers -t codex' "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg SOPS_VERSION=latest' "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=dig' "${BUILDAH_LOG}"
+grep -Fq 'ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml' "${repo}/.build-cache/Dockerfile.runtime"
+grep -Fq 'https://github.com/example/example.collection.git' "${repo}/.build-cache/Dockerfile.runtime"
 
 : > "${BUILDAH_LOG}"
 (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=drill SOPS_VERSION=3.12.2 ./build-images.sh >"${tmpdir}/drill.out" 2>"${tmpdir}/drill.err")

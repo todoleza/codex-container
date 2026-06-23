@@ -54,6 +54,16 @@ override. Override the DNF cache location with
 package downloads, while the builder layer cache is what skips unchanged DNF
 install steps.
 
+Sorted `container-collections/*.yml` or `*.yaml` drop-ins are folded under a
+top-level `collections:` key and installed with `ansible-galaxy collection
+install`. Each file should contain Ansible collection requirement list entries:
+
+```yaml
+- name: https://github.com/ansible-collections/hetzner.hcloud.git
+  type: git
+  version: main
+```
+
 The runtime image includes `age` from Fedora packages and the latest stable
 SOPS release binary by default. Pin SOPS with
 `SOPS_VERSION=<version> ./build-images.sh`.

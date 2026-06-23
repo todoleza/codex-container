@@ -10,6 +10,8 @@ RUN dnf -y makecache
 
 # DNF_DROPINS
 
+# ANSIBLE_COLLECTION_DROPINS
+
 RUN case "$(uname -m)" in \
     x86_64) sops_arch=amd64 ;; \
     aarch64|arm64) sops_arch=arm64 ;; \

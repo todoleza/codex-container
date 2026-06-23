@@ -6,6 +6,7 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 CONTAINER_CLI="${CONTAINER_CLI:-buildah}"
 DNF_CACHE_DIR="${DNF_CACHE_DIR:-${SCRIPT_DIR}/.build-cache/dnf-fedora-44}"
 GENERATED_DOCKERFILE="${SCRIPT_DIR}/.build-cache/Dockerfile.runtime"
+GENERATED_ANSIBLE_COLLECTIONS="${SCRIPT_DIR}/.build-cache/ansible-collections.yml"
 CODEX_FIREWALL_DNS_TOOL="${CODEX_FIREWALL_DNS_TOOL:-dig}"
 SOPS_VERSION="${SOPS_VERSION:-latest}"
 CODEX_PACKAGE_VERSION=""
@@ -37,6 +38,9 @@ Builds the runtime and firewall images from dist/codex.tgz.
 Environment:
   CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill  DNS resolver installed into the firewall image; default dig.
   SOPS_VERSION=latest                    SOPS release version installed into the runtime image.
+
+Collection drop-ins:
+  container-collections/*.yml entries are installed with ansible-galaxy collection install.
 EOF
       exit 0
       ;;
@@ -85,12 +89,16 @@ esac
 mkdir -p "${DNF_CACHE_DIR}/dnf" "${DNF_CACHE_DIR}/libdnf5" "$(dirname "${GENERATED_DOCKERFILE}")"
 
 generate_runtime_dockerfile() {
-  local found_marker=0
+  local found_dnf_marker=0
+  local found_collection_marker=0
   local dep_file
   local dep_files
+  local collection_file
+  local collection_files
 
   shopt -s nullglob
   dep_files=(container-deps/*.dnf)
+  collection_files=(container-collections/*.yml container-collections/*.yaml)
   shopt -u nullglob
 
   if [ "${#dep_files[@]}" -eq 0 ]; then
@@ -98,10 +106,38 @@ generate_runtime_dockerfile() {
     exit 1
   fi
 
+  if [ "${#collection_files[@]}" -gt 0 ]; then
+    {
+      printf 'collections:\n'
+      for collection_file in "${collection_files[@]}"; do
+        printf '  # %s\n' "${collection_file}"
+        awk '
+          {
+            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) {
+              next
+            }
+            print "  " $0
+            found = 1
+          }
+          END {
+            if (!found) {
+              exit 1
+            }
+          }
+        ' "${collection_file}" || {
+          echo "Error: ${collection_file} does not list any Ansible collections." >&2
+          exit 1
+        }
+      done
+    } > "${GENERATED_ANSIBLE_COLLECTIONS}"
+  else
+    rm -f "${GENERATED_ANSIBLE_COLLECTIONS}"
+  fi
+
   {
     while IFS= read -r line || [ -n "${line}" ]; do
       if [ "${line}" = "# DNF_DROPINS" ]; then
-        found_marker=1
+        found_dnf_marker=1
         for dep_file in "${dep_files[@]}"; do
           printf '# %s\n' "${dep_file}"
           printf 'RUN printf '\''Installing DNF drop-in: %s\\n'\'' \\\n' "${dep_file}"
@@ -128,14 +164,32 @@ generate_runtime_dockerfile() {
           }
           printf '  && true\n\n'
         done
+      elif [ "${line}" = "# ANSIBLE_COLLECTION_DROPINS" ]; then
+        found_collection_marker=1
+        if [ "${#collection_files[@]}" -gt 0 ]; then
+          printf 'RUN printf '\''%%s\\n'\'' \\\n'
+          awk '
+            {
+              gsub(/["\\`$]/, "\\\\&")
+              printf "    \"%s\" \\\n", $0
+            }
+          ' "${GENERATED_ANSIBLE_COLLECTIONS}"
+          printf '  > /tmp/codex-ansible-collections.yml \\\n'
+          printf '  && ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml \\\n'
+          printf '  && rm -f /tmp/codex-ansible-collections.yml\n\n'
+        fi
       else
         printf '%s\n' "${line}"
       fi
     done < ./Dockerfile.in
   } > "${GENERATED_DOCKERFILE}"
 
-  if [ "${found_marker}" -ne 1 ]; then
+  if [ "${found_dnf_marker}" -ne 1 ]; then
     echo "Error: Dockerfile.in is missing the # DNF_DROPINS marker." >&2
+    exit 1
+  fi
+  if [ "${#collection_files[@]}" -gt 0 ] && [ "${found_collection_marker}" -ne 1 ]; then
+    echo "Error: Dockerfile.in is missing the # ANSIBLE_COLLECTION_DROPINS marker." >&2
     exit 1
   fi
 }

@@ -32,6 +32,9 @@ also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
 set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
 avoids repeated package downloads; the explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
+Sorted `container-collections/*.yml` drop-ins are folded into an Ansible
+collection requirements file and installed into the runtime image with
+`ansible-galaxy collection install`.
 The runtime image also installs the latest stable SOPS release binary by
 default; pin it with `SOPS_VERSION=<version> ./build-images.sh`.
 
