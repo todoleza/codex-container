@@ -189,7 +189,7 @@ prepare_git_metadata_mounts() {
       APP_GIT_VOLUME_ARGS_ARRAY+=(-v "${git_dir}:${git_dir}:z")
       append_unique_word "${git_dir}"
     else
-      append_unique_word "/app${git_dir}"
+      append_unique_word "${git_dir}"
     fi
   done
 }
@@ -670,9 +670,9 @@ Launcher commands:
   pull, fetch   Copy from the workspace container to the host.
 
 Only --wd and --id are parsed by this launcher. Other dash arguments are passed
-to Codex. Relative container copy paths resolve under the preserved /app host
-path. Local copy paths are resolved to absolute host paths before calling
-podman cp.
+to Codex. Relative container copy paths resolve under the app container's
+workspace path. Local copy paths are resolved to absolute host paths before
+calling podman cp.
 EOF
 }
 
@@ -1373,7 +1373,7 @@ exec_in_app() {
     exec_args+=(-t)
   fi
 
-  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "/app${APP_WORK_DIR}" "${CONTAINER_NAME}" "$@"
+  podman exec "${PODMAN_EXEC_ARGS_ARRAY[@]}" "${exec_args[@]}" "${CODEX_APP_ENV_ARGS_ARRAY[@]}" -w "${APP_WORK_DIR}" "${CONTAINER_NAME}" "$@"
 }
 
 exec_in_app_root() {
@@ -1497,7 +1497,7 @@ container_copy_path() {
 
   case "${path}" in
     /*) printf '%s\n' "${path}" ;;
-    *) printf '/app%s/%s\n' "${APP_WORK_DIR}" "${path}" ;;
+    *) printf '%s/%s\n' "${APP_WORK_DIR}" "${path}" ;;
   esac
 }
 
@@ -1897,7 +1897,7 @@ start_new_pod() {
     "${CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
     -e OPENAI_API_KEY \
     -e TZ="${HOST_TZ}" \
-    -e CODEX_WORKDIR="/app${APP_WORK_DIR}" \
+    -e CODEX_WORKDIR="${APP_WORK_DIR}" \
     -e CODEX_SANDBOX_MODE="${CODEX_SANDBOX_MODE}" \
     -e CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY}" \
     -e CODEX_DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS}" \
@@ -1908,7 +1908,7 @@ start_new_pod() {
     --security-opt=no-new-privileges \
     --user "$(id -u):$(id -g)" \
     -v "$HOME/.codex:/home/node/.codex:z" \
-    -v "$WORK_DIR:/app$WORK_DIR" \
+    -v "$WORK_DIR:$WORK_DIR" \
     "${APP_GIT_VOLUME_ARGS_ARRAY[@]}" \
     "${APP_POLICY_VOLUME_ARGS_ARRAY[@]}" \
     "${PODMAN_CODEX_RUN_ARGS_ARRAY[@]}" \

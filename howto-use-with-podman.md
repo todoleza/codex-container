@@ -123,7 +123,8 @@ approval defaults unless the command line already sets them. For linked Git
 worktrees, the launcher mounts the shared Git metadata and the wrapper passes it
 to Codex with `--add-dir` unless the command line already supplies `--add-dir`.
 The image also installs a shell profile hook that changes interactive shells into
-the preserved `/app<host-path>` mount, so Codex sees a stable absolute path.
+the propagated workspace path, so Codex sees the same absolute path inside the
+container that the host-side session index records.
 
 The launcher parses `--wd` and `--id` as its own dash options. Other dash
 arguments are passed to Codex, so `--help` still means Codex CLI help. Use the
@@ -155,16 +156,16 @@ Launcher commands are selected by the first recognized non-dash argument:
 ```
 
 `spawn` starts the workspace pod in the background and exits. `enter` runs an
-interactive TTY command in the preserved `/app<host-path>` mount, defaulting to
-`bash`.
+interactive TTY command in the workspace's original absolute path, defaulting
+to `bash`.
 `shell` keeps stdin open but does not allocate a TTY, so `shell pwd` prints
-that absolute path. `rootenter` and `rootshell` run privileged root commands in
+that path. `rootenter` and `rootshell` run privileged root commands in
 the app container from `/root`; use them for live container maintenance and
 ad-hoc dependency probing, not as durable image changes. `fwenter` and
 `fwshell` do the same TTY and non-TTY operations in the firewall container;
 `fwenter` defaults to `bash` and `fwshell` requires a command. `copy`/`push`
 copy host paths into the container; `pull`/`fetch` copy container paths out.
-Relative container copy paths resolve under the same preserved mount; local copy
+Relative container copy paths resolve under the same workspace path; local copy
 paths such as `./file` are resolved to absolute host paths before calling
 `podman cp`.
 
@@ -274,7 +275,9 @@ workspace selection still prefers the longest running registered ancestor over
 a missing child workspace state. This keeps invocations from subdirectories
 attached to the same parent workspace pod. The parent workspace remains the
 mounted root, while app sessions start in the originally requested subdirectory
-when it is inside that workspace.
+when it is inside that workspace. The app container also mounts the workspace at
+its original host absolute path, which keeps Codex resume discovery and Git
+branch grouping aligned with host-side `~/.codex` session metadata.
 
 For linked Git worktrees, the launcher also mounts the worktree's shared Git
 metadata into the app container at the absolute path recorded by the `.git`

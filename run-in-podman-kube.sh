@@ -235,7 +235,7 @@ spec:
         - name: TZ
           value: "${HOST_TZ}"
         - name: CODEX_WORKDIR
-          value: "/app${WORK_DIR}"
+          value: "${WORK_DIR}"
         - name: CODEX_SANDBOX_MODE
           value: "${CODEX_SANDBOX_MODE}"
         - name: CODEX_APPROVAL_POLICY
@@ -251,7 +251,7 @@ spec:
         - name: codex-home
           mountPath: /home/node/.codex
         - name: workspace
-          mountPath: /app${WORK_DIR}
+          mountPath: ${WORK_DIR}
 EOF
 
 podman kube play --replace --network pasta "${MANIFEST_PATH}" >/dev/null
@@ -285,4 +285,4 @@ for arg in "$@"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
 
-podman exec -it "${APP_NAME}" bash -c "cd \"/app${WORK_DIR}\" && codex ${quoted_args}"
+podman exec -it "${APP_NAME}" bash -c "cd \"${WORK_DIR}\" && codex ${quoted_args}"
