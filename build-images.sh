@@ -7,6 +7,7 @@ CONTAINER_CLI="${CONTAINER_CLI:-buildah}"
 DNF_CACHE_DIR="${DNF_CACHE_DIR:-${SCRIPT_DIR}/.build-cache/dnf-fedora-44}"
 GENERATED_DOCKERFILE="${SCRIPT_DIR}/.build-cache/Dockerfile.runtime"
 CODEX_FIREWALL_DNS_TOOL="${CODEX_FIREWALL_DNS_TOOL:-dig}"
+SOPS_VERSION="${SOPS_VERSION:-latest}"
 CODEX_PACKAGE_VERSION=""
 CODEX_ARTIFACT_TYPE_FOR_BUILD=""
 CALLER_CODEX_ARTIFACT_TYPE="${CODEX_ARTIFACT_TYPE:-}"
@@ -35,6 +36,7 @@ Builds the runtime and firewall images from dist/codex.tgz.
 
 Environment:
   CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill  DNS resolver installed into the firewall image; default dig.
+  SOPS_VERSION=latest                    SOPS release version installed into the runtime image.
 EOF
       exit 0
       ;;
@@ -219,6 +221,7 @@ runtime_build_args=(
   --layers
   -t codex
   -f "${GENERATED_DOCKERFILE}"
+  --build-arg "SOPS_VERSION=${SOPS_VERSION}"
   --label "org.opencontainers.image.title=codex-container-runtime"
   --label "org.opencontainers.image.description=Fedora-based Codex runtime image for codex-container"
   --label "codex.cli.version=${CODEX_PACKAGE_VERSION}"

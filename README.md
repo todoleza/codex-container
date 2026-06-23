@@ -32,6 +32,8 @@ also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
 set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
 avoids repeated package downloads; the explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
+The runtime image also installs the latest stable SOPS release binary by
+default; pin it with `SOPS_VERSION=<version> ./build-images.sh`.
 
 The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps

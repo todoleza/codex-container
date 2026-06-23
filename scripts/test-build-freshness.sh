@@ -78,11 +78,13 @@ grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/noninteractive.err"
 
 (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue ./build-images.sh >"${tmpdir}/continue.out" 2>"${tmpdir}/continue.err")
 grep -Fq 'bud --layers -t codex' "${BUILDAH_LOG}"
+grep -Fq -- '--build-arg SOPS_VERSION=latest' "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=dig' "${BUILDAH_LOG}"
 
 : > "${BUILDAH_LOG}"
-(cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=drill ./build-images.sh >"${tmpdir}/drill.out" 2>"${tmpdir}/drill.err")
+(cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=drill SOPS_VERSION=3.12.2 ./build-images.sh >"${tmpdir}/drill.out" 2>"${tmpdir}/drill.err")
 grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=drill' "${BUILDAH_LOG}"
+grep -Fq -- '--build-arg SOPS_VERSION=3.12.2' "${BUILDAH_LOG}"
 
 if (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=bogus ./build-images.sh >"${tmpdir}/tool.out" 2>"${tmpdir}/tool.err"); then
   echo "invalid firewall DNS tool should fail" >&2

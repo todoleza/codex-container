@@ -54,6 +54,10 @@ override. Override the DNF cache location with
 package downloads, while the builder layer cache is what skips unchanged DNF
 install steps.
 
+The runtime image includes `age` from Fedora packages and the latest stable
+SOPS release binary by default. Pin SOPS with
+`SOPS_VERSION=<version> ./build-images.sh`.
+
 The firewall image resolver is selected before image creation:
 
 ```bash
