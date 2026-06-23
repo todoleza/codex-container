@@ -6,7 +6,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
 fakebin="${tmpdir}/bin"
-mkdir -p "${fakebin}" "${tmpdir}/runtime" "${tmpdir}/work"
+mkdir -p "${fakebin}" "${tmpdir}/runtime" "${tmpdir}/work" "${tmpdir}/bad-work"
 
 cat > "${fakebin}/podman" <<'FAKE_PODMAN'
 #!/bin/sh
@@ -44,10 +44,11 @@ export XDG_RUNTIME_DIR="${tmpdir}/runtime"
 SIDECARS=hcloud:metrics \
 SIDECAR_hcloud_IMAGE=localhost/hcloud-acl-proxy:latest \
 SIDECAR_hcloud_ENV_PREFIX=HCLOUD_PROXY_ENV_ \
-SIDECAR_hcloud_RUN_ARGS="--read-only" \
+SIDECAR_hcloud_RUN_ARGS='-v ${CODEX_POLICY_DIR}/hcloud-acl-policy.yaml:/config/policy.yaml:ro --read-only' \
 SIDECAR_hcloud_COMMAND="run-proxy --listen 127.0.0.1:8090" \
 SIDECAR_metrics_IMAGE=localhost/metrics-proxy:latest \
 SIDECAR_metrics_ENV_PREFIX=METRICS_PROXY_ENV_ \
+CODEX_POLICY_DIR="${HOME}/local/codex" \
 CODEX_ENV_HCLOUD_ENDPOINT=http://localhost:8090/v1 \
 CODEX_ENV_HCLOUD_TOKEN=local-proxy-token \
 HCLOUD_PROXY_ENV_HCLOUD_TOKEN=real-upstream-token \
@@ -64,11 +65,10 @@ grep -Fq "run --name codex-work-" "${PODMAN_LOG}"
 grep -Fq "sidecar-hcloud" "${PODMAN_LOG}"
 grep -Fq "sidecar-metrics" "${PODMAN_LOG}"
 grep -Fq -- "--pod codex-work-" "${PODMAN_LOG}"
-grep -Fq -- "-e HCLOUD_TOKEN" "${PODMAN_LOG}"
-grep -Fq -- "-e HCLOUD_PROXY_TOKEN" "${PODMAN_LOG}"
-grep -Fq -- "-e METRICS_TOKEN" "${PODMAN_LOG}"
+grep -Fq -- "--env-file ${tmpdir}/runtime/codex-container/sidecar-env/codex-work-" "${PODMAN_LOG}"
 grep -Fq -- "-e HCLOUD_ENDPOINT" "${PODMAN_LOG}"
 grep -Fq -- "-e HCLOUD_TOKEN" "${PODMAN_LOG}"
+grep -Fq -- "-v ${HOME}/local/codex/hcloud-acl-policy.yaml:/config/policy.yaml:ro" "${PODMAN_LOG}"
 grep -Fq -- "--read-only" "${PODMAN_LOG}"
 grep -Fq -- "sh -lc run-proxy --listen 127.0.0.1:8090" "${PODMAN_LOG}"
 
@@ -80,6 +80,9 @@ if grep -Fq "real-upstream-token" "${PODMAN_LOG}"; then
   echo "sidecar secret values should not be passed on the podman command line" >&2
   exit 1
 fi
+grep -R -Fxq "HCLOUD_TOKEN=real-upstream-token" "${tmpdir}/runtime/codex-container/sidecar-env"
+grep -R -Fxq "HCLOUD_PROXY_TOKEN=local-proxy-token" "${tmpdir}/runtime/codex-container/sidecar-env"
+grep -R -Fxq "METRICS_TOKEN=metrics-token" "${tmpdir}/runtime/codex-container/sidecar-env"
 
 workspace_state_dir="${tmpdir}/runtime/codex-container/workspaces/state/$(printf '%s' "${tmpdir}/work" | sha256sum | cut -c1-8)"
 grep -Fxq "hcloud:metrics" "${workspace_state_dir}/sidecars"
@@ -106,7 +109,7 @@ if SIDECARS=bad \
   SIDECAR_bad_ENV_PREFIX=BAD_PROXY_ENV_ \
   CODEX_RELEASE_CHECK_ON_SPAWN=0 \
   STARTUP_SUMMARY_HOLD_SECONDS=0 \
-  "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work" spawn >"${tmpdir}/bad.out" 2>"${tmpdir}/bad.err"; then
+  "${repo_root}/run-in-container.sh" --wd "${tmpdir}/bad-work" spawn >"${tmpdir}/bad.out" 2>"${tmpdir}/bad.err"; then
   echo "missing sidecar image should fail" >&2
   exit 1
 fi

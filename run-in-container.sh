@@ -381,6 +381,115 @@ collect_prefixed_env_args() {
   printf '%s\0' "${env_args[@]}"
 }
 
+write_prefixed_env_file() {
+  local prefix="$1"
+  local env_file="$2"
+  local source_name
+  local target_name
+  local source_names=()
+
+  while IFS= read -r source_name; do
+    [ -n "${source_name}" ] || continue
+    source_names+=("${source_name}")
+  done < <(compgen -v "${prefix}" | sort || true)
+
+  : > "${env_file}"
+  chmod 600 "${env_file}"
+  for source_name in "${source_names[@]}"; do
+    target_name="${source_name#"${prefix}"}"
+    if ! [[ "${target_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Error: Invalid sidecar env target variable: ${source_name}" >&2
+      exit 1
+    fi
+
+    printf '%s=%s\n' "${target_name}" "${!source_name}" >> "${env_file}"
+  done
+}
+
+expand_home_path() {
+  local path="$1"
+
+  case "${path}" in
+    "~")
+      printf '%s\n' "${HOME}"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "${HOME}" "${path#"~/"}"
+      ;;
+    *)
+      printf '%s\n' "${path}"
+      ;;
+  esac
+}
+
+expand_path_variables() {
+  local path="$1"
+  local name
+  local value
+  local iterations=0
+
+  while [[ "${path}" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*) ]]; do
+    iterations=$((iterations + 1))
+    if [ "${iterations}" -gt 50 ]; then
+      echo "Error: too many variable expansions in sidecar volume path: ${path}" >&2
+      exit 1
+    fi
+
+    name="${BASH_REMATCH[1]:-${BASH_REMATCH[2]}}"
+    if ! [[ -v "${name}" ]]; then
+      echo "Error: undefined variable in sidecar volume path: ${name}" >&2
+      exit 1
+    fi
+
+    value="${!name}"
+    path="${path//\$\{${name}\}/${value}}"
+    path="${path//\$${name}/${value}}"
+  done
+
+  printf '%s\n' "${path}"
+}
+
+expand_sidecar_volume_source() {
+  local source="$1"
+
+  expand_home_path "$(expand_path_variables "${source}")"
+}
+
+normalize_volume_spec_path() {
+  local spec="$1"
+  local source
+  local rest
+
+  source="${spec%%:*}"
+  if [ "${source}" = "${spec}" ]; then
+    printf '%s\n' "${spec}"
+    return 0
+  fi
+
+  rest="${spec#"${source}"}"
+  printf '%s%s\n' "$(expand_sidecar_volume_source "${source}")" "${rest}"
+}
+
+normalize_sidecar_run_args() {
+  local -n args_ref="$1"
+  local idx
+  local arg
+
+  for idx in "${!args_ref[@]}"; do
+    arg="${args_ref[idx]}"
+    case "${arg}" in
+      -v|--volume)
+        if [ "$((idx + 1))" -lt "${#args_ref[@]}" ]; then
+          args_ref[$((idx + 1))]="$(normalize_volume_spec_path "${args_ref[$((idx + 1))]}")"
+        fi
+        ;;
+      --volume=*)
+        args_ref[idx]="--volume=$(normalize_volume_spec_path "${arg#--volume=}")"
+        ;;
+    esac
+  done
+}
+
 refresh_runtime_arrays() {
   read -r -a ALLOWED_DOMAIN_ARRAY <<< "${OPENAI_ALLOWED_DOMAINS}"
   read -r -a EXTRA_ALLOWED_IPV4_ARRAY <<< "${EXTRA_ALLOWED_IPV4}"
@@ -1652,15 +1761,9 @@ start_sidecars() {
   local run_args_value
   local command_value
   local container_name
-  local env_arg
-  local source_name
+  local sidecar_env_file
   local sidecar_env_args=()
   local sidecar_run_args=()
-  local restore_name
-  local restore_names=()
-  local restore_values=()
-  local restore_was_set=()
-  local restore_idx
 
   for sidecar_id in "${SIDECAR_IDS_ARRAY[@]}"; do
     [ -n "${sidecar_id}" ] || continue
@@ -1671,27 +1774,14 @@ start_sidecars() {
     container_name="$(sidecar_container_name "${sidecar_id}")"
 
     sidecar_env_args=()
-    restore_names=()
-    restore_values=()
-    restore_was_set=()
-    while IFS= read -r source_name; do
-      [ -n "${source_name}" ] || continue
-      restore_name="${source_name#"${env_prefix}"}"
-      restore_names+=("${restore_name}")
-      if [[ -v "${restore_name}" ]]; then
-        restore_was_set+=(1)
-        restore_values+=("${!restore_name}")
-      else
-        restore_was_set+=(0)
-        restore_values+=("")
-      fi
-    done < <(compgen -v "${env_prefix}" | sort || true)
-    while IFS= read -r -d '' env_arg; do
-      sidecar_env_args+=("${env_arg}")
-    done < <(collect_prefixed_env_args "${env_prefix}")
+    sidecar_env_file="${RUNTIME_BASE_DIR}/codex-container/sidecar-env/${POD_NAME}-${sidecar_id}.env"
+    mkdir -p "$(dirname "${sidecar_env_file}")"
+    write_prefixed_env_file "${env_prefix}" "${sidecar_env_file}"
+    sidecar_env_args+=(--env-file "${sidecar_env_file}")
 
     sidecar_run_args=()
     read -r -a sidecar_run_args <<< "${run_args_value}"
+    normalize_sidecar_run_args sidecar_run_args
 
     if [ -n "${command_value}" ]; then
       podman run --name "${container_name}" -d \
@@ -1729,16 +1819,6 @@ start_sidecars() {
           exit 1
         }
     fi
-
-    for restore_idx in "${!restore_names[@]}"; do
-      restore_name="${restore_names[restore_idx]}"
-      if [ "${restore_was_set[restore_idx]}" = "1" ]; then
-        printf -v "${restore_name}" '%s' "${restore_values[restore_idx]}"
-        export "${restore_name}"
-      else
-        unset "${restore_name}"
-      fi
-    done
   done
 }
 
