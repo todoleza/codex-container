@@ -25,35 +25,36 @@ RUN case "$(uname -m)" in \
   fi \
   && curl -fsSL -o /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v${sops_version}/sops-v${sops_version}.linux.${sops_arch}" \
   && chmod 755 /usr/local/bin/sops \
-  && sops --version
+  && sops --version --check-for-updates
+
+COPY container-runtime/codex container-runtime/codex-firewall-policy container-runtime/init container-runtime/profile.sh /tmp/codex-container-runtime/
 
 RUN useradd --create-home "${USERNAME}" \
-  && mkdir -p /usr/local/share/npm-global \
-  && chown -R "${USERNAME}:${USERNAME}" /usr/local/share
-
-COPY container-runtime/codex /usr/local/bin/codex
-COPY container-runtime/codex-firewall-policy /usr/local/bin/codex-firewall-policy
-COPY container-runtime/init /usr/local/bin/codex-container-init
-COPY container-runtime/profile.sh /usr/local/share/codex-container/profile.sh
-
-RUN chmod 755 /usr/local/bin/codex /usr/local/bin/codex-firewall-policy /usr/local/bin/codex-container-init /usr/local/share/codex-container/profile.sh \
+  && install -d -o "${USERNAME}" -g "${USERNAME}" /usr/local/share/npm-global \
+  && install -d /usr/local/share/codex-container \
+  && install -m 755 /tmp/codex-container-runtime/codex /usr/local/bin/codex \
+  && install -m 755 /tmp/codex-container-runtime/codex-firewall-policy /usr/local/bin/codex-firewall-policy \
+  && install -m 755 /tmp/codex-container-runtime/init /usr/local/bin/codex-container-init \
+  && install -m 755 /tmp/codex-container-runtime/profile.sh /usr/local/share/codex-container/profile.sh \
   && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' > /etc/profile.d/codex-container.sh \
-  && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' >> /home/"${USERNAME}"/.bashrc
+  && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' >> /home/"${USERNAME}"/.bashrc \
+  && rm -rf /tmp/codex-container-runtime
 
 USER "${USERNAME}"
 
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
+ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
+    PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-COPY dist/codex.tgz codex.tgz
+ARG CODEX_PACKAGE_VERSION
 
-RUN npm install -g codex.tgz \
+RUN printf 'Installing Codex CLI %s\n' "${CODEX_PACKAGE_VERSION}" \
+  && npm install -g /tmp/codex.tgz \
   && npm cache clean --force \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/docs
 
-ENV CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
-ENV CODEX_SANDBOX_MODE=danger-full-access
-ENV CODEX_APPROVAL_POLICY=on-request
-ENV CODEX_DANGEROUS_BYPASS=0
+ENV CODEX_UNSAFE_ALLOW_NO_SANDBOX=1 \
+    CODEX_SANDBOX_MODE=danger-full-access \
+    CODEX_APPROVAL_POLICY=on-request \
+    CODEX_DANGEROUS_BYPASS=0

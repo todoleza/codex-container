@@ -276,6 +276,7 @@ runtime_build_args=(
   -t codex
   -f "${GENERATED_DOCKERFILE}"
   --build-arg "SOPS_VERSION=${SOPS_VERSION}"
+  --build-arg "CODEX_PACKAGE_VERSION=${CODEX_PACKAGE_VERSION}"
   --label "org.opencontainers.image.title=codex-container-runtime"
   --label "org.opencontainers.image.description=Fedora-based Codex runtime image for codex-container"
   --label "codex.cli.version=${CODEX_PACKAGE_VERSION}"
@@ -290,6 +291,7 @@ runtime_build_args=(
 runtime_build_args+=(
   --volume "${DNF_CACHE_DIR}/dnf:/var/cache/dnf:Z,rw"
   --volume "${DNF_CACHE_DIR}/libdnf5:/var/cache/libdnf5:Z,rw"
+  --volume "${STAGED_ARTIFACT}:/tmp/codex.tgz:ro"
 )
 
 "${BUILD_COMMAND[@]}" "${runtime_build_args[@]}" .

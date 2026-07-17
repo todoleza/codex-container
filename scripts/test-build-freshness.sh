@@ -85,6 +85,8 @@ grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/noninteractive.err"
 (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue ./build-images.sh >"${tmpdir}/continue.out" 2>"${tmpdir}/continue.err")
 grep -Fq 'bud --layers -t codex' "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg SOPS_VERSION=latest' "${BUILDAH_LOG}"
+grep -Fq -- '--build-arg CODEX_PACKAGE_VERSION=0.140.0' "${BUILDAH_LOG}"
+grep -Fq -- "--volume ${repo}/dist/codex.tgz:/tmp/codex.tgz:ro" "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=dig' "${BUILDAH_LOG}"
 grep -Fq 'ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml' "${repo}/.build-cache/Dockerfile.runtime"
 grep -Fq 'https://github.com/example/example.collection.git' "${repo}/.build-cache/Dockerfile.runtime"
