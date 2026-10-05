@@ -1,5 +1,19 @@
 # Project History
 
+## 2026-10-06 - Consolidate dependency catalogs
+
+### Changed
+- Moved DNF, COPR, literal repository, and Ansible collection catalogs under
+  `container-deps/{dnf,copr,repos,collections}` so the shared catalog mirrors
+  each profile's membership structure.
+- Repointed profile symlinks and updated generated evidence, tests, and
+  operator documentation for the consolidated paths.
+
+### Validation
+- All profile links resolve within their matching catalog.
+- Profile generation, repository tests, Python compilation, shell syntax, and
+  whitespace checks pass with the consolidated layout.
+
 ## 2026-10-05 - Add profile-aware runtime builds
 
 ### Changed

@@ -45,7 +45,7 @@ either `--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`,
 `CODEX_ARTIFACT_STALE_POLICY=continue|refresh|fail`.
 
 The runtime build is generated from `Dockerfile.in`. Sorted
-`container-deps/*.dnf` drop-ins become separate DNF install layers, and
+selected `container-deps/dnf/*.dnf` components become separate DNF install layers, and
 `build-images.sh` enables builder layer caching explicitly. It also mounts a
 persistent DNF cache from `.build-cache/dnf-fedora-44` by default. The default
 builder is `buildah bud`; set `CONTAINER_CLI=podman` to use Podman as an
@@ -54,7 +54,7 @@ override. Override the DNF cache location with
 package downloads, while the builder layer cache is what skips unchanged DNF
 install steps.
 
-Sorted `container-collections/*.yml` or `*.yaml` drop-ins are folded under a
+Selected `container-deps/collections/*.yml` or `*.yaml` components are folded under a
 top-level `collections:` key and installed with `ansible-galaxy collection
 install`. Each file should contain Ansible collection requirement list entries:
 

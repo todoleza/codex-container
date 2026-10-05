@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PROFILE_ORDER = ("default", "infra", "python", "media", "full")
-KINDS = {"dnf": ("container-deps", {".dnf"}), "copr": ("container-repos", {".copr"}),
-         "repos": ("container-repos", {".repo"}), "collections": ("container-collections", {".yml", ".yaml"})}
+KINDS = {"dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr", {".copr"}),
+         "repos": ("container-deps/repos", {".repo"}), "collections": ("container-deps/collections", {".yml", ".yaml"})}
 COPR_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.:+-]+)?$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:*?-]*$")
 MEMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

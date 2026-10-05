@@ -7,7 +7,7 @@ Run Codex in an unprivileged container while enforcing outbound network policy f
 ### Images
 
 - `Dockerfile.in`: template for the generated Fedora-based Codex runtime image
-- `container-deps/`: globbed DNF package drop-ins for runtime install layers
+- `container-deps/`: shared `dnf`, `copr`, `repos`, and `collections` catalogs
 - `Dockerfile.firewall`: minimal Alpine firewall image
 - `build-images.sh`: top-level Buildah-first image builder consuming `dist/codex.tgz`
 - `build-images.py`: profile validation, retained Containerfile generation,
@@ -23,8 +23,8 @@ through one container-owned daemon process and shared control socket.
 ### Dependency profiles
 
 Runtime dependencies are selected through relative symlinks under
-`container-profiles/<name>/{dnf,copr,repos,collections}`. The shared catalogs
-remain in `container-deps/`, `container-repos/`, and `container-collections/`.
+`container-profiles/<name>/{dnf,copr,repos,collections}`. The matching shared
+catalogs live under `container-deps/{dnf,copr,repos,collections}`.
 The profiles are `default`, `infra`, `python`, `media`, and `full`; SCAD remains
 unselected. Generated Containerfiles are retained per profile under
 `.build-cache/profiles/` and use the shared DNF cache and builder layer store.

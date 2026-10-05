@@ -27,13 +27,13 @@ does not run `pnpm` or `npm pack` locally.
 The image build defaults to `buildah bud`; set `CONTAINER_CLI=podman` to use
 Podman as an override. The runtime image is generated from `Dockerfile.in`;
 `build-images.sh` is a compatibility entrypoint for the Python build driver.
-It validates profile symlinks and expands the selected `container-deps/*.dnf`
+It validates profile symlinks and expands the selected `container-deps/dnf/*.dnf`
 components into separate DNF install layers. Runtime builds
 also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
 set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
 avoids repeated package downloads; the explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
-Selected `container-collections/*.yml` drop-ins are folded into an Ansible
+Selected `container-deps/collections/*.yml` drop-ins are folded into an Ansible
 collection requirements file and installed into the runtime image with
 `ansible-galaxy collection install`.
 The runtime image also installs the latest stable SOPS release binary by
@@ -50,9 +50,10 @@ build does not rotate the current or previous image.
 Generated evidence is retained under
 `.build-cache/profiles/<profile>/Containerfile`, with supporting collection
 requirements beside it. All profiles share `.build-cache/dnf-fedora-44` and the
-builder's local layer store. `container-repos/` accepts declarative `.copr`
-files (`OWNER/PROJECT [CHROOT]`) and literal `.repo` files. Literal repositories
-do not automatically add their domains to the firewall allowlist.
+builder's local layer store. `container-deps/copr/` accepts declarative `.copr`
+files (`OWNER/PROJECT [CHROOT]`), while `container-deps/repos/` accepts literal
+`.repo` files. Literal repositories do not automatically add their domains to
+the firewall allowlist.
 
 The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps
@@ -99,8 +100,8 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - Fedora Codex runtime image template
 - `container-profiles/`
   - relative-symlink membership for DNF, COPR, repository, and collection catalogs
-- `container-repos/`
-  - Fedora COPR declarations and literal DNF repository files
+- `container-deps/`
+  - shared `dnf`, `copr`, `repos`, and `collections` catalogs selected by profiles
 - `container-runtime/`
   - image-side Codex wrapper and shell profile hook
 - `Dockerfile.firewall`
