@@ -26,17 +26,33 @@ does not run `pnpm` or `npm pack` locally.
 
 The image build defaults to `buildah bud`; set `CONTAINER_CLI=podman` to use
 Podman as an override. The runtime image is generated from `Dockerfile.in`;
-`build-images.sh` expands sorted `container-deps/*.dnf` drop-ins into separate
-DNF install layers and enables builder layer caching explicitly. Runtime builds
+`build-images.sh` is a compatibility entrypoint for the Python build driver.
+It validates profile symlinks and expands the selected `container-deps/*.dnf`
+components into separate DNF install layers. Runtime builds
 also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
 set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
 avoids repeated package downloads; the explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
-Sorted `container-collections/*.yml` drop-ins are folded into an Ansible
+Selected `container-collections/*.yml` drop-ins are folded into an Ansible
 collection requirements file and installed into the runtime image with
 `ansible-galaxy collection install`.
 The runtime image also installs the latest stable SOPS release binary by
 default; pin it with `SOPS_VERSION=<version> ./build-images.sh`.
+
+With no selector, the builder creates the lean `codex:default` image. Use
+repeated or comma-separated `--profile` values to build exactly those profiles,
+or `--all-profiles` (optionally with `--no-profile`). Available profiles are
+`default`, `infra`, `python`, `media`, and `full`. Each successful build first
+uses a candidate tag, rotates the existing image to `codex:prev-<profile>`, and
+then promotes `codex:<profile>`; default also updates `codex:latest`. A failed
+build does not rotate the current or previous image.
+
+Generated evidence is retained under
+`.build-cache/profiles/<profile>/Containerfile`, with supporting collection
+requirements beside it. All profiles share `.build-cache/dnf-fedora-44` and the
+builder's local layer store. `container-repos/` accepts declarative `.copr`
+files (`OWNER/PROJECT [CHROOT]`) and literal `.repo` files. Literal repositories
+do not automatically add their domains to the firewall allowlist.
 
 The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps
@@ -80,7 +96,11 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
 ## Layout
 
 - `Dockerfile.in`
-  - Fedora Codex runtime image, with DNF package groups included from `container-deps/`
+  - Fedora Codex runtime image template
+- `container-profiles/`
+  - relative-symlink membership for DNF, COPR, repository, and collection catalogs
+- `container-repos/`
+  - Fedora COPR declarations and literal DNF repository files
 - `container-runtime/`
   - image-side Codex wrapper and shell profile hook
 - `Dockerfile.firewall`

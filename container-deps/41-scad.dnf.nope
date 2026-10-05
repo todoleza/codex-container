@@ -1,0 +1,7 @@
+openscad
+#prusa-slicer
+admesh
+meshlab
+python3-trimesh
+python3-numpy
+ImageMagick

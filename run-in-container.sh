@@ -86,6 +86,23 @@ detect_requested_work_dir() {
   printf '%s\n' "${WORK_DIR}"
 }
 
+detect_requested_profile() {
+  local args=("$@")
+  local idx=0
+  while [ "${idx}" -lt "${#args[@]}" ]; do
+    case "${args[$idx]}" in
+      --profile)
+        if [ -n "${args[$((idx + 1))]:-}" ]; then
+          printf '%s\n' "${args[$((idx + 1))]}"
+          return
+        fi
+        ;;
+      --) break ;;
+    esac
+    idx=$((idx + 1))
+  done
+}
+
 resolve_workspace_root() {
   local dir
   local git_root
@@ -118,7 +135,7 @@ resolve_workspace_root() {
 
 refresh_workspace_runtime_names() {
   WORKSPACE_SLUG=$(slugify "$(basename "${WORK_DIR}")")
-  WORKSPACE_HASH=$(stable_hash "${WORK_DIR}")
+  WORKSPACE_HASH=$(stable_hash "${WORK_DIR}:${CODEX_CONTAINER_PROFILE}")
   POD_NAME="codex-${WORKSPACE_SLUG}-${WORKSPACE_HASH}"
   INFRA_NAME="${POD_NAME}-infra"
   FW_NAME="${POD_NAME}-fw"
@@ -195,6 +212,7 @@ prepare_git_metadata_mounts() {
 }
 
 EARLY_WORK_DIR="$(resolve_workspace_root "$(detect_requested_work_dir "$@")")"
+CLI_CODEX_CONTAINER_PROFILE="$(detect_requested_profile "$@")"
 : "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
 : "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
 
@@ -210,7 +228,7 @@ fi
 : "${CODEX_ALLOWED_DOMAIN_CATEGORIES:=openai source_control os_packages containers language_packages jvm_dotnet schema_docs}"
 : "${CODEX_ALLOWED_DOMAINS_OPENAI:=api.openai.com auth.openai.com chatgpt.com}"
 : "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL:=github.com githubusercontent.com api.github.com gitlab.com bitbucket.org}"
-: "${CODEX_ALLOWED_DOMAINS_OS_PACKAGES:=alpinelinux.org archlinux.org centos.org debian.org fedoraproject.org ppa.launchpad.net ubuntu.com packages.microsoft.com}"
+: "${CODEX_ALLOWED_DOMAINS_OS_PACKAGES:=alpinelinux.org archlinux.org centos.org copr.fedorainfracloud.org download.copr.fedorainfracloud.org debian.org fedoraproject.org ppa.launchpad.net ubuntu.com packages.microsoft.com}"
 : "${CODEX_ALLOWED_DOMAINS_CONTAINERS:=docker.com docker.io ghcr.io gcr.io mcr.microsoft.com quay.io}"
 : "${CODEX_ALLOWED_DOMAINS_LANGUAGE_PACKAGES:=cpan.org crates.io golang.org goproxy.io haskell.org hex.pm metacpan.org nodejs.org npmjs.com npmjs.org packagist.org pkg.go.dev pub.dev pypa.io pypi.org pypi.python.org pythonhosted.org ruby-lang.org rubygems.org rubyonrails.org rustup.rs yarnpkg.com}"
 : "${CODEX_ALLOWED_DOMAINS_JVM_DOTNET:=apt.llvm.org dot.net dotnet.microsoft.com gradle.org maven.org nuget.org}"
@@ -221,7 +239,20 @@ fi
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
-: "${CONTAINER_IMAGE:=codex}"
+: "${CODEX_CONTAINER_PROFILE:=default}"
+if [ -n "${CLI_CODEX_CONTAINER_PROFILE}" ]; then
+  CODEX_CONTAINER_PROFILE="${CLI_CODEX_CONTAINER_PROFILE}"
+fi
+case "${CODEX_CONTAINER_PROFILE}" in
+  default|infra|python|media|full) ;;
+  *) echo "Error: unknown Codex container profile: ${CODEX_CONTAINER_PROFILE}" >&2; exit 1 ;;
+esac
+CONTAINER_IMAGE_EXPLICIT=0
+if [ -n "${CONTAINER_IMAGE+x}" ]; then
+  CONTAINER_IMAGE_EXPLICIT=1
+else
+  CONTAINER_IMAGE="codex:${CODEX_CONTAINER_PROFILE}"
+fi
 : "${FIREWALL_CONTAINER_IMAGE:=codex-firewall}"
 : "${PROXY_CONTAINER_IMAGE:=${FIREWALL_CONTAINER_IMAGE}}"
 : "${PROXY_ENABLE:=0}"
@@ -632,7 +663,7 @@ write_optional_state_file() {
 usage() {
   cat <<'EOF'
 Usage:
-  run-in-container.sh [--wd DIR] [CODEX_ARGS...]
+  run-in-container.sh [--profile NAME] [--wd DIR] [CODEX_ARGS...]
   run-in-container.sh list
   run-in-container.sh [--id ID|--wd DIR] status [ID]
   run-in-container.sh [--id ID|--wd DIR] name [ID]
@@ -669,7 +700,7 @@ Launcher commands:
   copy, push    Copy from the host into the workspace container.
   pull, fetch   Copy from the workspace container to the host.
 
-Only --wd and --id are parsed by this launcher. Other dash arguments are passed
+The launcher accepts --profile default|infra|python|media|full, --wd, and --id. Other dash arguments are passed
 to Codex. Relative container copy paths resolve under the app container's
 workspace path. Local copy paths are resolved to absolute host paths before
 calling podman cp.
@@ -857,6 +888,14 @@ parse_args() {
         SELECTOR_ID="$2"
         shift 2
         ;;
+      --profile)
+        if [ -z "${2:-}" ]; then
+          echo "Error: --profile flag provided but no profile specified." >&2
+          exit 1
+        fi
+        CODEX_CONTAINER_PROFILE="$2"
+        shift 2
+        ;;
       --work_dir)
         echo "Error: --work_dir has been replaced by --wd." >&2
         exit 1
@@ -1035,7 +1074,7 @@ ensure_workspace_record() {
   local seq
 
   registry_init
-  hash=$(stable_hash "${path}")
+  hash=$(stable_hash "${path}:${CODEX_CONTAINER_PROFILE}")
   alias=$(workspace_alias "${path}")
 
   if [ -L "${REGISTRY_ROOT}/by-path-hash/${hash}" ]; then
@@ -1058,6 +1097,7 @@ ensure_workspace_record() {
   ln -sfn "../../state/${hash}" "${REGISTRY_ROOT}/by-alias/${alias}/${hash}"
 
   write_state_file "${state_dir}" path "${path}"
+  write_state_file "${state_dir}" profile "${CODEX_CONTAINER_PROFILE}"
   write_state_file "${state_dir}" alias "${alias}"
   write_state_file "${state_dir}" hash "${hash}"
   write_state_file "${state_dir}" seq "${seq}"
@@ -1175,6 +1215,7 @@ resolve_running_ancestor_state() {
   local entry
   local path
   local app
+  local profile
   local best_entry=""
   local best_len=0
 
@@ -1185,8 +1226,10 @@ resolve_running_ancestor_state() {
   for entry in "${REGISTRY_ROOT}/state/"*; do
     path="$(read_state_file "${entry}" path)"
     app="$(read_state_file "${entry}" app)"
+    profile="$(read_state_file "${entry}" profile)"
     [ -n "${path}" ] || continue
     [ -n "${app}" ] || continue
+    [ "${profile:-default}" = "${CODEX_CONTAINER_PROFILE}" ] || continue
 
     if [[ "${target_path}" != "${path}" && "${target_path}" != "${path}/"* ]]; then
       continue
@@ -1263,6 +1306,7 @@ print_status() {
   printf 'id: %s\n' "$(read_state_file "${state_dir}" seq)"
   printf 'alias: %s\n' "$(read_state_file "${state_dir}" alias)"
   printf 'path: %s\n' "$(read_state_file "${state_dir}" path)"
+  printf 'profile: %s\n' "$(read_state_file "${state_dir}" profile)"
   for name in pod app fw proxy; do
     value=$(read_state_file "${state_dir}" "${name}")
     printf '%s: %s' "${name}" "${value}"
@@ -1589,6 +1633,7 @@ print_startup_summary() {
   echo "pod: ${POD_NAME}"
   echo "workdir: ${WORK_DIR}"
   echo "runtime image: ${CONTAINER_IMAGE}"
+  echo "runtime profile: ${CODEX_CONTAINER_PROFILE}"
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
   if [ -n "${CODEX_LOCAL_VERSION}" ]; then
@@ -1712,6 +1757,7 @@ start_proxy_container() {
     --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
     --label "codex.workspace.role=proxy" \
     -e TZ="${HOST_TZ}" \
     --security-opt=no-new-privileges \
@@ -1790,6 +1836,7 @@ start_sidecars() {
         --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
         --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
         --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+        --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
         --label "codex.workspace.role=sidecar" \
         --label "codex.workspace.sidecar=${sidecar_id}" \
         -e TZ="${HOST_TZ}" \
@@ -1808,6 +1855,7 @@ start_sidecars() {
         --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
         --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
         --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+        --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
         --label "codex.workspace.role=sidecar" \
         --label "codex.workspace.sidecar=${sidecar_id}" \
         -e TZ="${HOST_TZ}" \
@@ -1844,6 +1892,7 @@ start_new_pod() {
     --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
     --label "codex.workspace.role=pod" \
     "${CODEX_VERSION_LABEL_ARGS_ARRAY[@]}" \
     "${CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
@@ -1856,6 +1905,7 @@ start_new_pod() {
     --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
     --label "codex.workspace.role=firewall" \
     -e TZ="${HOST_TZ}" \
     --cap-add=NET_ADMIN \
@@ -1892,6 +1942,7 @@ start_new_pod() {
     --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
     --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
     --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
     --label "codex.workspace.role=app" \
     "${CODEX_VERSION_LABEL_ARGS_ARRAY[@]}" \
     "${CODEX_APP_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
@@ -1920,6 +1971,11 @@ start_new_pod() {
 
 parse_args "$@"
 apply_trailing_selector
+
+case "${CODEX_CONTAINER_PROFILE}" in
+  default|infra|python|media|full) ;;
+  *) echo "Error: unknown Codex container profile: ${CODEX_CONTAINER_PROFILE}" >&2; exit 1 ;;
+esac
 
 if [ "${ACTION}" = "help" ]; then
   usage
@@ -1953,6 +2009,11 @@ if [ -n "${SELECTOR_ID}" ] && [ "${WORK_DIR_SELECTED}" = "0" ]; then
     exit 1
   fi
   WORK_DIR=$(read_state_file "${SELECTOR_STATE_DIR}" path)
+  selected_profile="$(read_state_file "${SELECTOR_STATE_DIR}" profile)"
+  CODEX_CONTAINER_PROFILE="${selected_profile:-default}"
+  if [ "${CONTAINER_IMAGE_EXPLICIT}" = "0" ]; then
+    CONTAINER_IMAGE="codex:${CODEX_CONTAINER_PROFILE}"
+  fi
 fi
 
 REQUESTED_WORK_DIR="$(realpath -m "$WORK_DIR")"

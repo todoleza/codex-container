@@ -84,7 +84,7 @@ grep -R -Fxq "HCLOUD_TOKEN=real-upstream-token" "${tmpdir}/runtime/codex-contain
 grep -R -Fxq "HCLOUD_PROXY_TOKEN=local-proxy-token" "${tmpdir}/runtime/codex-container/sidecar-env"
 grep -R -Fxq "METRICS_TOKEN=metrics-token" "${tmpdir}/runtime/codex-container/sidecar-env"
 
-workspace_state_dir="${tmpdir}/runtime/codex-container/workspaces/state/$(printf '%s' "${tmpdir}/work" | sha256sum | cut -c1-8)"
+workspace_state_dir="${tmpdir}/runtime/codex-container/workspaces/state/$(printf '%s' "${tmpdir}/work:default" | sha256sum | cut -c1-8)"
 grep -Fxq "hcloud:metrics" "${workspace_state_dir}/sidecars"
 grep -Fq "sidecar-hcloud" "${workspace_state_dir}/sidecar_hcloud"
 grep -Fq "sidecar-metrics" "${workspace_state_dir}/sidecar_metrics"

@@ -481,3 +481,15 @@ podman exec <firewall-container> firewall-lift
 `firewall-lift` removes only this prototype's `inet codex_firewall` nftables
 table and records `mode: lifted` in the shared policy state. Run
 `firewall-reload` to restore enforcement from the configured policy files.
+# Image profiles
+
+Build the lean default with `./build-images.sh`, selected images with
+`./build-images.sh --profile infra,python`, or every image with
+`./build-images.sh --all-profiles`. Launch a workspace with, for example,
+`./run-in-container.sh --profile infra --wd /path/to/workspace`. The
+`CODEX_CONTAINER_PROFILE` environment setting is equivalent, while an explicit
+`CONTAINER_IMAGE` overrides the derived `codex:<profile>` image name.
+
+Rollback manually with `podman tag codex:prev-<profile> codex:<profile>` after
+inspecting the retained tags. Profile selection is part of workspace identity,
+so multiple profiles can run against the same checkout.

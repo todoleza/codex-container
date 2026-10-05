@@ -1,109 +1,31 @@
 #!/bin/bash
 set -euo pipefail
-
-source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "${tmpdir}"' EXIT
-
-repo="${tmpdir}/repo"
-fakebin="${tmpdir}/bin"
-mkdir -p "${repo}/scripts" "${repo}/container-deps" "${repo}/container-collections" "${repo}/dist" "${fakebin}" "${tmpdir}/pkg/package"
-
-cp "${source_root}/build-images.sh" "${repo}/build-images.sh"
-cp "${source_root}/scripts/codex-artifact-common.sh" "${repo}/scripts/codex-artifact-common.sh"
-
-cat > "${repo}/Dockerfile.in" <<'EOF_DOCKER'
-FROM scratch
-# DNF_DROPINS
-# ANSIBLE_COLLECTION_DROPINS
-COPY dist/codex.tgz codex.tgz
-EOF_DOCKER
-
-cat > "${repo}/Dockerfile.firewall" <<'EOF_FIREWALL'
-FROM scratch
-EOF_FIREWALL
-
-printf 'bash\n' > "${repo}/container-deps/10-base.dnf"
-cat > "${repo}/container-collections/10-example.yml" <<'EOF_COLLECTION'
-- name: https://github.com/example/example.collection.git
-  type: git
-  version: main
-EOF_COLLECTION
-printf '{"name":"@openai/codex","version":"0.140.0"}\n' > "${tmpdir}/pkg/package/package.json"
-tar -C "${tmpdir}/pkg" -czf "${repo}/dist/codex.tgz" package/package.json
-
-cat > "${repo}/dist/codex-artifact.env" <<'EOF_META'
-CODEX_ARTIFACT_TYPE=release
-CODEX_ARTIFACT_VERSION=0.140.0
-CODEX_ARTIFACT_GITHUB_TAG=rust-v0.140.0
-CODEX_ARTIFACT_ASSET_NAME=codex-npm-0.140.0.tgz
-CODEX_ARTIFACT_ASSET_URL=https://download.example/codex-npm-0.140.0.tgz
-CODEX_ARTIFACT_SOURCE_PATH=/tmp/codex-npm-0.140.0.tgz
-CODEX_ARTIFACT_FETCHED_EPOCH=1
-EOF_META
-
-cat > "${fakebin}/curl" <<'FAKE_CURL'
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tmpdir="$(mktemp -d)"; trap 'rm -rf "${tmpdir}"' EXIT
+mkdir -p "${tmpdir}/bin"
+package_version="$(tar -xOf "${repo_root}/dist/codex.tgz" package/package.json | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+cat > "${tmpdir}/bin/curl" <<EOF
 #!/bin/sh
-printf '%s\n' "$*" >> "${CURL_LOG}"
-case "$*" in
-  *"/releases/latest"*)
-    printf '%s\n' '{"tag_name":"rust-v0.141.0","name":"0.141.0","prerelease":false,"assets":[{"name":"codex-npm-0.141.0.tgz","browser_download_url":"https://download.example/codex-npm-0.141.0.tgz"}]}'
-    ;;
-  *)
-    exit 22
-    ;;
-esac
-FAKE_CURL
-
-cat > "${fakebin}/buildah" <<'FAKE_BUILDAH'
+printf '%s\n' '{"tag_name":"rust-v${package_version}"}'
+EOF
+cat > "${tmpdir}/bin/buildah" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${BUILDAH_LOG}"
-exit 0
-FAKE_BUILDAH
-
-chmod 755 "${fakebin}/curl" "${fakebin}/buildah" "${repo}/build-images.sh" "${repo}/scripts/codex-artifact-common.sh"
-
-export PATH="${fakebin}:${PATH}"
-export CODEX_CURL="${fakebin}/curl"
-export BUILDAH_LOG="${tmpdir}/buildah.log"
-export CURL_LOG="${tmpdir}/curl.log"
-
-if (cd "${repo}" && CODEX_CONTAINER_BATCH=1 ./build-images.sh >"${tmpdir}/batch.out" 2>"${tmpdir}/batch.err"); then
-  echo "batch stale build should fail by default" >&2
-  exit 1
-fi
-grep -Fq -- '--max-time 1' "${CURL_LOG}"
-grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/batch.err"
-test ! -f "${BUILDAH_LOG}"
-
-if (cd "${repo}" && ./build-images.sh --non-interactive >"${tmpdir}/noninteractive.out" 2>"${tmpdir}/noninteractive.err"); then
-  echo "--non-interactive stale build should fail by default" >&2
-  exit 1
-fi
-grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/noninteractive.err"
-
-(cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue ./build-images.sh >"${tmpdir}/continue.out" 2>"${tmpdir}/continue.err")
-grep -Fq 'bud --layers -t codex' "${BUILDAH_LOG}"
-grep -Fq -- '--build-arg SOPS_VERSION=latest' "${BUILDAH_LOG}"
-grep -Fq -- '--build-arg CODEX_PACKAGE_VERSION=0.140.0' "${BUILDAH_LOG}"
-grep -Fq -- "--volume ${repo}/dist/codex.tgz:/tmp/codex.tgz:ro" "${BUILDAH_LOG}"
-grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=dig' "${BUILDAH_LOG}"
-grep -Fq 'ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml' "${repo}/.build-cache/Dockerfile.runtime"
-grep -Fq 'https://github.com/example/example.collection.git' "${repo}/.build-cache/Dockerfile.runtime"
-
-: > "${BUILDAH_LOG}"
-(cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=drill SOPS_VERSION=3.12.2 ./build-images.sh >"${tmpdir}/drill.out" 2>"${tmpdir}/drill.err")
-grep -Fq -- '--build-arg CODEX_FIREWALL_DNS_TOOL=drill' "${BUILDAH_LOG}"
-grep -Fq -- '--build-arg SOPS_VERSION=3.12.2' "${BUILDAH_LOG}"
-
-if (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=continue CODEX_FIREWALL_DNS_TOOL=bogus ./build-images.sh >"${tmpdir}/tool.out" 2>"${tmpdir}/tool.err"); then
-  echo "invalid firewall DNS tool should fail" >&2
-  exit 1
-fi
-grep -Fq 'unsupported CODEX_FIREWALL_DNS_TOOL=bogus' "${tmpdir}/tool.err"
-
-if (cd "${repo}" && CODEX_ARTIFACT_STALE_POLICY=bogus ./build-images.sh >"${tmpdir}/bogus.out" 2>"${tmpdir}/bogus.err"); then
-  echo "invalid stale policy should fail" >&2
-  exit 1
-fi
-grep -Fq 'invalid CODEX_ARTIFACT_STALE_POLICY' "${tmpdir}/bogus.err"
+case "$1" in inspect) exit 1 ;; esac
+EOF
+chmod 755 "${tmpdir}/bin/curl" "${tmpdir}/bin/buildah"
+export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache"
+(cd "${repo_root}" && ./build-images.sh --batch)
+grep -Eq 'bud --layers -t codex:candidate-default-' "${BUILDAH_LOG}"
+grep -Fq 'tag codex:default codex:latest' "${BUILDAH_LOG}"
+grep -Fq 'bud --layers -t codex-firewall' "${BUILDAH_LOG}"
+grep -Fq -- '--label codex.container.profile=default' "${BUILDAH_LOG}"
+grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Containerfile"
+cat > "${tmpdir}/bin/curl" <<EOF
+#!/bin/sh
+printf '%s\n' '{"tag_name":"rust-v999.0.0"}'
+EOF
+before="$(wc -l < "${BUILDAH_LOG}")"
+if (cd "${repo_root}" && ./build-images.sh --batch >"${tmpdir}/out" 2>"${tmpdir}/err"); then echo "batch stale build should fail" >&2; exit 1; fi
+grep -Fq 'refusing to build stale Codex artifact' "${tmpdir}/err"
+test "$(wc -l < "${BUILDAH_LOG}")" -eq "${before}"

@@ -123,9 +123,26 @@ if grep -Fq '/run/codex-proxy' "${PODMAN_LOG}"; then
   exit 1
 fi
 
-workspace_state_dir="${tmpdir}/runtime/codex-container/workspaces/state/$(printf '%s' "${tmpdir}/work" | sha256sum | cut -c1-8)"
+workspace_state_dir="${tmpdir}/runtime/codex-container/workspaces/state/$(printf '%s' "${tmpdir}/work:default" | sha256sum | cut -c1-8)"
 grep -Fq '0.141.0' "${workspace_state_dir}/codex_cli_version"
 grep -Fq '0.222.0' "${workspace_state_dir}/codex_cli_latest"
+grep -Fq 'default' "${workspace_state_dir}/profile"
+
+mkdir -p "${tmpdir}/profile-work"
+: > "${PODMAN_LOG}"
+"${repo_root}/run-in-container.sh" --profile infra --wd "${tmpdir}/profile-work" spawn > "${tmpdir}/profile.out"
+grep -Fq 'runtime profile: infra' "${tmpdir}/profile.out"
+grep -Fq 'runtime image: codex:infra' "${tmpdir}/profile.out"
+grep -Fq -- '--label codex.container.profile=infra' "${PODMAN_LOG}"
+grep -Fq -- ' codex:infra ' "${PODMAN_LOG}"
+default_name="$("${repo_root}/run-in-container.sh" --profile default --wd "${tmpdir}/profile-work" name)"
+infra_name="$("${repo_root}/run-in-container.sh" --profile infra --wd "${tmpdir}/profile-work" name)"
+test "${default_name}" != "${infra_name}"
+
+: > "${PODMAN_LOG}"
+CONTAINER_IMAGE=custom:test "${repo_root}/run-in-container.sh" --profile media --wd "${tmpdir}/profile-work" spawn > "${tmpdir}/override.out"
+grep -Fq 'runtime image: custom:test' "${tmpdir}/override.out"
+grep -Fq -- ' custom:test ' "${PODMAN_LOG}"
 
 : > "${PODMAN_LOG}"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/work/subdir" spawn > "${tmpdir}/nested-env.out"
@@ -152,7 +169,7 @@ grep -Fq -- "${tmpdir}/gitroot/.git" "${PODMAN_LOG}"
 mkdir -p "${tmpdir}/orphan/main"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan/main" spawn > "${tmpdir}/orphan-child.out"
 "${repo_root}/run-in-container.sh" --wd "${tmpdir}/orphan" spawn > "${tmpdir}/orphan-parent.out"
-orphan_hash="$(printf '%s' "${tmpdir}/orphan" | sha256sum | cut -c1-8)"
+orphan_hash="$(printf '%s' "${tmpdir}/orphan:default" | sha256sum | cut -c1-8)"
 orphan_app="codex-orphan-${orphan_hash}-app"
 
 : > "${PODMAN_LOG}"
