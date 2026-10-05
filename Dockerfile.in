@@ -57,4 +57,5 @@ RUN printf 'Installing Codex CLI %s\n' "${CODEX_PACKAGE_VERSION}" \
 ENV CODEX_UNSAFE_ALLOW_NO_SANDBOX=1 \
     CODEX_SANDBOX_MODE=danger-full-access \
     CODEX_APPROVAL_POLICY=on-request \
+    CODEX_NO_DAEMON=1 \
     CODEX_DANGEROUS_BYPASS=0

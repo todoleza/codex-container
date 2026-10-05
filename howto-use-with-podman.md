@@ -133,9 +133,14 @@ The launcher:
 
 The runtime image includes a `codex` wrapper in `/usr/local/bin`. Any `codex`
 process started inside the app container gets the propagated sandbox and
-approval defaults unless the command line already sets them. For linked Git
-worktrees, the launcher mounts the shared Git metadata and the wrapper passes it
-to Codex with `--add-dir` unless the command line already supplies `--add-dir`.
+approval defaults unless the command line already sets them. It also defaults
+to `--no-daemon`: workspace containers share the host `~/.codex` mount, while
+the standalone daemon executable and control socket would otherwise be owned
+by one ephemeral container. Set `CODEX_ENV_CODEX_NO_DAEMON=0` in a launcher env
+file only if you intentionally manage that daemon lifecycle yourself. For
+linked Git worktrees, the launcher mounts the shared Git metadata and the
+wrapper passes it to Codex with `--add-dir` unless the command line already
+supplies `--add-dir`.
 The image also installs a shell profile hook that changes interactive shells into
 the propagated workspace path, so Codex sees the same absolute path inside the
 container that the host-side session index records.

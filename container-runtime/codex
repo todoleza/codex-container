@@ -6,6 +6,7 @@ SANDBOX_MODE="${CODEX_SANDBOX_MODE:-danger-full-access}"
 APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
 DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS:-0}"
 EXTRA_ADD_DIRS="${CODEX_EXTRA_ADD_DIRS:-}"
+NO_DAEMON="${CODEX_NO_DAEMON:-1}"
 
 has_arg() {
   local wanted="$1"
@@ -26,6 +27,10 @@ if [ ! -x "${REAL_CODEX_BIN}" ]; then
 fi
 
 default_flags=()
+if [ "${NO_DAEMON}" = "1" ] && ! has_arg "--no-daemon" "$@"; then
+  default_flags+=(--no-daemon)
+fi
+
 if has_arg "--dangerously-bypass-approvals-and-sandbox" "$@"; then
   :
 elif [ "${DANGEROUS_BYPASS}" = "1" ]; then

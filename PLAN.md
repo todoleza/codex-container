@@ -13,6 +13,11 @@ Run Codex in an unprivileged container while enforcing outbound network policy f
 
 The Codex image contains Codex and developer tooling only. The firewall image contains only the scripts and packages needed to manage nftables-based IPv4/IPv6 egress policy.
 
+The runtime wrapper defaults the CLI to `--no-daemon`. Each workspace has an
+ephemeral app container, while all app containers mount the same host
+`~/.codex`; keeping the app server in-process avoids coupling those containers
+through one container-owned daemon process and shared control socket.
+
 ### Pod layout
 
 `run-in-container.sh` creates one rootless Podman pod containing:

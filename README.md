@@ -60,6 +60,7 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - current workable path
   - keeps Codex sandbox resources available inside the runtime image
   - defaults Codex itself to `--sandbox danger-full-access` and propagates that policy into the app container
+  - defaults Codex to `--no-daemon`, avoiding a shared daemon socket and separately downloaded executable across ephemeral workspace containers
   - starts interactive shells in the mounted workspace via an image profile hook
   - builds the firewall allowlist from named domain categories, with explicitly omitted preset domains kept out by default
   - exposes the current firewall policy read-only inside the app container through `codex-firewall-policy`
