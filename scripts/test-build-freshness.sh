@@ -16,11 +16,19 @@ EOF
 chmod 755 "${tmpdir}/bin/curl" "${tmpdir}/bin/buildah"
 export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache"
 (cd "${repo_root}" && ./build-images.sh --batch)
-grep -Eq 'bud --layers -t codex:candidate-default-' "${BUILDAH_LOG}"
+grep -Eq 'bud --layers --target codex-profile -t codex:candidate-default-' "${BUILDAH_LOG}"
+grep -Fq -- '--target codex-profile' "${BUILDAH_LOG}"
 grep -Fq 'tag codex:default codex:latest' "${BUILDAH_LOG}"
 grep -Fq 'bud --layers -t codex-firewall' "${BUILDAH_LOG}"
 grep -Fq -- '--label codex.container.profile=default' "${BUILDAH_LOG}"
 grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Containerfile"
+: > "${BUILDAH_LOG}"
+(cd "${repo_root}" && ./build-images.sh --all-profiles --batch)
+test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq 5
+for profile in default infra python media full; do
+  grep -Eq "bud --layers --target codex-profile -t codex:candidate-${profile}-" "${BUILDAH_LOG}"
+done
+test "$(grep -c 'bud --layers -t codex-firewall' "${BUILDAH_LOG}")" -eq 1
 cat > "${tmpdir}/bin/curl" <<EOF
 #!/bin/sh
 printf '%s\n' '{"tag_name":"rust-v999.0.0"}'

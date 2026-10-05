@@ -16,11 +16,39 @@ class ProfilesTest(unittest.TestCase):
 
     def test_real_membership(self):
         self.assertEqual(m.discover_profiles(), m.PROFILE_ORDER)
-        default, full = m.read_profile("default"), m.read_profile("full")
+        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        m.validate_profile_relationships(profiles)
+        default, full = profiles["default"], profiles["full"]
         dp = sum((m.parse_dnf(p) for p in default.members["dnf"]), [])
         self.assertEqual(dp.count("bind-utils"), 1)
         self.assertEqual(sum(m.parse_dnf(p).count("python3-dateutil") for p in full.members["dnf"]), 1)
-        self.assertNotIn("41-scad.dnf.nope", {p.name for p in full.members["dnf"]})
+        self.assertNotIn("90-scad.dnf.nope", {p.name for p in full.members["dnf"]})
+
+    def test_shared_stage_and_canonical_order(self):
+        template = (ROOT/"Dockerfile.in").read_text()
+        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        common_stages = []
+        for profile in profiles.values():
+            text, _ = m.render(profile, template, common=profiles["default"])
+            common_stages.append(text[text.index("FROM fedora:44 AS codex-common"):text.index("FROM codex-common AS codex-profile")])
+            final = text[text.index("FROM codex-common AS codex-profile"):]
+            self.assertNotIn("CODEX_PACKAGE_VERSION", common_stages[-1])
+            self.assertIn("CODEX_PACKAGE_VERSION", final)
+        self.assertTrue(all(stage == common_stages[0] for stage in common_stages[1:]))
+
+        full, _ = m.render(profiles["full"], template, common=profiles["default"])
+        ordered = ["40-ansible.dnf", "41-podman.dnf", "42-hcloud.dnf", "50-python.dnf", "60-yt-dlp.dnf"]
+        positions = [full.index(name, full.index("FROM codex-common AS codex-profile")) for name in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(positions[-1], full.index("ansible-galaxy collection install"))
+
+    def test_profile_relationship_validation(self):
+        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        media_members = dict(profiles["media"].members)
+        media_members["dnf"] = tuple(path for path in media_members["dnf"] if path.name != "50-python.dnf")
+        profiles["media"] = m.Profile("media", media_members)
+        with self.assertRaises(m.BuildError):
+            m.validate_profile_relationships(profiles)
     def test_selectors(self):
         self.assertEqual(m.selection([], m.PROFILE_ORDER)[1], ("default",))
         self.assertEqual(m.selection(["--profile", "media,infra"], m.PROFILE_ORDER)[1], ("media", "infra"))
@@ -53,7 +81,7 @@ class ProfilesTest(unittest.TestCase):
             with self.assertRaises(m.BuildError): m.parse_copr(bad)
     def test_render_and_atomic_overwrite(self):
         text, _ = m.render(m.read_profile("default"), (ROOT/"Dockerfile.in").read_text())
-        self.assertIn("# Selected: container-deps/dnf/10-agent-core.dnf", text)
+        self.assertIn("# Common membership: container-deps/dnf/10-agent-core.dnf", text)
         self.assertLess(text.index("10-agent-core.dnf"), text.index("20-agent-extended.dnf"))
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/"Containerfile"; m.atomic_write(path,"one\n"); m.atomic_write(path,"two\n"); self.assertEqual(path.read_text(),"two\n")

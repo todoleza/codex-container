@@ -1,4 +1,4 @@
-FROM fedora:44
+FROM fedora:44 AS codex-common
 
 ARG TZ
 ENV TZ="${TZ}"
@@ -8,9 +8,7 @@ ARG SOPS_VERSION=latest
 
 RUN dnf -y makecache
 
-# DNF_DROPINS
-
-# ANSIBLE_COLLECTION_DROPINS
+# COMMON_DEPENDENCY_DROPINS
 
 RUN case "$(uname -m)" in \
     x86_64) sops_arch=amd64 ;; \
@@ -40,10 +38,18 @@ RUN useradd --create-home "${USERNAME}" \
   && printf '%s\n' 'source /usr/local/share/codex-container/profile.sh' >> /home/"${USERNAME}"/.bashrc \
   && rm -rf /tmp/codex-container-runtime
 
-USER "${USERNAME}"
-
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global \
     PATH="${PATH}:/usr/local/share/npm-global/bin"
+
+FROM codex-common AS codex-profile
+
+ARG USERNAME=node
+
+# PROFILE_DEPENDENCY_DROPINS
+
+# ANSIBLE_COLLECTION_DROPINS
+
+USER "${USERNAME}"
 
 ARG CODEX_PACKAGE_VERSION
 

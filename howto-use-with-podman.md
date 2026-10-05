@@ -54,6 +54,13 @@ override. Override the DNF cache location with
 package downloads, while the builder layer cache is what skips unchanged DNF
 install steps.
 
+All profile Containerfiles contain the same internal `codex-common` stage with
+the default packages, SOPS, runtime files, and user setup. Profile-specific
+dependencies are added from that stage, and Codex is installed last. Updating
+only `dist/codex.tgz` should therefore rebuild the final Codex layer for each
+selected profile without rebuilding DNF or collection layers. The internal
+stage is cache-only; it does not create another operator-facing image tag.
+
 Selected `container-deps/collections/*.yml` or `*.yaml` components are folded under a
 top-level `collections:` key and installed with `ansible-galaxy collection
 install`. Each file should contain Ansible collection requirement list entries:
