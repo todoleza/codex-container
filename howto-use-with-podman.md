@@ -51,8 +51,8 @@ persistent DNF cache from `.build-cache/dnf-fedora-44` by default. The default
 builder is `buildah bud`; set `CONTAINER_CLI=podman` to use Podman as an
 override. Override the DNF cache location with
 `DNF_CACHE_DIR=/path/to/cache ./build-images.sh`. The mounted DNF cache reduces
-package downloads, while the builder layer cache is what skips unchanged DNF
-install steps.
+package downloads because every generated install enables DNF `keepcache`;
+the builder layer cache is what skips unchanged DNF install steps entirely.
 
 All profile Containerfiles contain the same internal `codex-common` stage with
 the default packages, SOPS, runtime files, and user setup. Profile-specific
@@ -496,6 +496,9 @@ Build the lean default with `./build-images.sh`, selected images with
 `./run-in-container.sh --profile infra --wd /path/to/workspace`. The
 `CODEX_CONTAINER_PROFILE` environment setting is equivalent, while an explicit
 `CONTAINER_IMAGE` overrides the derived `codex:<profile>` image name.
+Every build invocation builds `codex-firewall` first because the firewall
+sidecar is a hard runtime dependency; selected Codex profile images follow only
+after that build succeeds.
 
 Rollback manually with `podman tag codex:prev-<profile> codex:<profile>` after
 inspecting the retained tags. Profile selection is part of workspace identity,

@@ -28,12 +28,30 @@ catalogs live under `container-deps/{dnf,copr,repos,collections}`.
 The profiles are `default`, `infra`, `python`, `media`, and `full`; SCAD remains
 unselected. Generated Containerfiles are retained per profile under
 `.build-cache/profiles/` and use the shared DNF cache and builder layer store.
+Generated DNF installs enable `keepcache`, retaining downloaded RPM payloads in
+that shared cache across profile branches and later builds.
+
+Each generated Containerfile builds an identical internal `codex-common` stage
+from the default profile's repositories and packages plus SOPS, runtime files,
+and user setup. Every published profile derives directly from that stage, adds
+only its dependency delta, installs its selected collections, and installs the
+frequently changing Codex artifact last. The internal stage is not published
+and no profile depends on an existing `codex:default` tag.
 
 Repository setup is ordered before package layers: literal `.repo` files,
 conditional Fedora COPR support and enablement, DNF components, then Ansible
 collections. Builds use candidate tags so a successful promotion retains one
 `codex:prev-<profile>` rollback image. The launcher includes the selected
 profile in workspace identity, allowing profiles for one checkout to coexist.
+The build orchestrator always builds the common `codex-firewall` image before
+any selected runtime profile because the firewall sidecar is a hard runtime
+dependency; a firewall build failure prevents runtime image builds.
+
+DNF components use a canonical cache order: common (`10`-`30`), infrastructure
+(`40`-`42`), Python (`50`), media (`60`), and disabled (`90`). `media` therefore
+shares Python's dependency prefix, while `full` shares infrastructure's DNF
+prefix before adding Python and media dependencies. These are cache prefixes,
+not public image inheritance relationships.
 
 ### Pod layout
 

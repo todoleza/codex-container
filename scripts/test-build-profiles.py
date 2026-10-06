@@ -83,6 +83,15 @@ class ProfilesTest(unittest.TestCase):
         text, _ = m.render(m.read_profile("default"), (ROOT/"Dockerfile.in").read_text())
         self.assertIn("# Common membership: container-deps/dnf/10-agent-core.dnf", text)
         self.assertLess(text.index("10-agent-core.dnf"), text.index("20-agent-extended.dnf"))
+        install_lines = [line for line in text.splitlines() if "dnf -y install" in line]
+        self.assertTrue(install_lines)
+        self.assertTrue(all(m.DNF_INSTALL_OPTIONS in line for line in install_lines))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            copr = root/"example.copr"; copr.write_text("owner/project\n")
+            members = {kind: () for kind in m.KINDS}; members["copr"] = (copr,)
+            copr_steps = "\n".join(m.dependency_steps(members, root))
+            self.assertIn(f"dnf -y install {m.DNF_INSTALL_OPTIONS} dnf5-plugins", copr_steps)
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/"Containerfile"; m.atomic_write(path,"one\n"); m.atomic_write(path,"two\n"); self.assertEqual(path.read_text(),"two\n")
 if __name__ == "__main__": unittest.main()

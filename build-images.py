@@ -13,6 +13,7 @@ KINDS = {"dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr"
 COPR_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.:+-]+)?$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:*?-]*$")
 MEMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+DNF_INSTALL_OPTIONS = "--setopt=install_weak_deps=False --setopt=keepcache=True"
 
 class BuildError(RuntimeError): pass
 
@@ -77,25 +78,64 @@ def requirements(profile: Profile, root: Path) -> str | None:
         output += [f"  # {source.relative_to(root)}"] + [f"  {x}" for x in lines]
     return "\n".join(output) + "\n"
 
-def render(profile: Profile, template: str, root: Path = ROOT) -> tuple[str, str | None]:
-    for marker in ("# DNF_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
-        if template.count(marker) != 1: fail(f"Dockerfile.in must contain exactly one {marker} marker")
-    sources = [p.relative_to(root) for kind in KINDS for p in profile.members[kind]]
-    head = ["# Generated file; retained as build evidence.", f"# Profile: {profile.name}"] + [f"# Selected: {p}" for p in sources]; steps = []
-    for source in profile.members["repos"]:
-        rel = source.relative_to(root); steps += [f"# {rel}", f"COPY {rel} /etc/yum.repos.d/{source.name}", ""]
-    if profile.members["copr"]:
-        steps += ["RUN printf 'Installing Fedora COPR support\\n' \\", "  && dnf -y install --setopt=install_weak_deps=False dnf5-plugins", ""]
-        for source in profile.members["copr"]:
-            project, chroot = parse_copr(source); rel = source.relative_to(root)
+def validate_profile_relationships(profiles: dict[str, Profile]) -> None:
+    def require_subset(parent: str, child: str) -> None:
+        for kind in KINDS:
+            missing = set(profiles[parent].members[kind]) - set(profiles[child].members[kind])
+            if missing:
+                names = ", ".join(sorted(path.name for path in missing))
+                fail(f"profile {child} must include {parent} {kind} membership: {names}")
+
+    for name in PROFILE_ORDER[1:]:
+        require_subset("default", name)
+    require_subset("python", "media")
+    require_subset("python", "full")
+    require_subset("media", "full")
+    require_subset("infra", "full")
+
+def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[str]:
+    steps: list[str] = []
+    for source in members["repos"]:
+        rel = source.relative_to(root)
+        steps += [f"# {rel}", f"COPY {rel} /etc/yum.repos.d/{source.name}", ""]
+    if members["copr"]:
+        steps += ["RUN printf 'Installing Fedora COPR support\\n' \\", f"  && dnf -y install {DNF_INSTALL_OPTIONS} dnf5-plugins", ""]
+        for source in members["copr"]:
+            project, chroot = parse_copr(source)
+            rel = source.relative_to(root)
             steps += [f"# {rel}", f"RUN dnf -y copr enable {project}" + (f" {chroot}" if chroot else ""), ""]
-    for source in profile.members["dnf"]:
-        rel = source.relative_to(root); steps += [f"# {rel}", f"RUN printf 'Installing DNF component: {rel}\\n' \\", "  && dnf -y install --setopt=install_weak_deps=False \\"]
-        steps += [f"    {p} \\" for p in parse_dnf(source)] + ["  && true", ""]
-    req = requirements(profile, root); collection = ""
+    for source in members["dnf"]:
+        rel = source.relative_to(root)
+        steps += [f"# {rel}", f"RUN printf 'Installing DNF component: {rel}\\n' \\", f"  && dnf -y install {DNF_INSTALL_OPTIONS} \\"]
+        steps += [f"    {package} \\" for package in parse_dnf(source)] + ["  && true", ""]
+    return steps
+
+def render(profile: Profile, template: str, root: Path = ROOT, common: Profile | None = None) -> tuple[str, str | None]:
+    for marker in ("# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
+        if template.count(marker) != 1: fail(f"Dockerfile.in must contain exactly one {marker} marker")
+    common = common or read_profile("default", root)
+    common_sources = {kind: set(common.members[kind]) for kind in KINDS}
+    head = ["# Generated file; retained as build evidence.", f"# Profile: {profile.name}"]
+    for kind in KINDS:
+        for source in profile.members[kind]:
+            role = "Common membership" if source in common_sources[kind] else "Profile membership"
+            head.append(f"# {role}: {source.relative_to(root)}")
+
+    shared_members = {kind: common.members[kind] if kind != "collections" else () for kind in KINDS}
+    profile_members = {
+        kind: tuple(source for source in profile.members[kind] if source not in common_sources[kind])
+        if kind != "collections" else ()
+        for kind in KINDS
+    }
+    shared_steps = dependency_steps(shared_members, root)
+    profile_steps = dependency_steps(profile_members, root)
+    req = requirements(profile, root)
+    collection = ""
     if req: collection = "\n".join([f"COPY .build-cache/profiles/{profile.name}/ansible-collections.yml /tmp/codex-ansible-collections.yml",
         "RUN ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml \\", "  && rm -f /tmp/codex-ansible-collections.yml"])
-    body = template.replace("# DNF_DROPINS", "\n".join(steps).rstrip()).replace("# ANSIBLE_COLLECTION_DROPINS", collection)
+    body = template.replace("# COMMON_DEPENDENCY_DROPINS", "\n".join(shared_steps).rstrip())
+    body = body.replace("# PROFILE_DEPENDENCY_DROPINS", "\n".join(profile_steps).rstrip())
+    body = body.replace("# ANSIBLE_COLLECTION_DROPINS", collection)
     return "\n".join(head) + "\n\n" + body, req
 
 def atomic_write(path: Path, content: str):
@@ -107,8 +147,8 @@ def atomic_write(path: Path, content: str):
         try: os.unlink(temporary)
         except FileNotFoundError: pass
         raise
-def generate(profile: Profile, root: Path = ROOT) -> Path:
-    containerfile, req = render(profile, (root / "Dockerfile.in").read_text(), root); out = root / ".build-cache/profiles" / profile.name
+def generate(profile: Profile, root: Path = ROOT, common: Profile | None = None) -> Path:
+    containerfile, req = render(profile, (root / "Dockerfile.in").read_text(), root, common); out = root / ".build-cache/profiles" / profile.name
     if req: atomic_write(out / "ansible-collections.yml", req)
     elif (out / "ansible-collections.yml").exists(): (out / "ansible-collections.yml").unlink()
     atomic_write(out / "Containerfile", containerfile); return out / "Containerfile"
@@ -167,21 +207,25 @@ def promote(cli: str, candidate: str, profile: str):
     subprocess.run([cli, "rmi", candidate], check=True)
 
 def build(argv: list[str]) -> int:
-    args, selected = selection(argv, discover_profiles()); cli = os.environ.get("CONTAINER_CLI", "buildah")
+    discovered = discover_profiles()
+    args, selected = selection(argv, discovered)
+    profiles = {name: read_profile(name) for name in discovered}
+    validate_profile_relationships(profiles)
+    cli = os.environ.get("CONTAINER_CLI", "buildah")
     if cli not in {"buildah", "podman"}: fail(f"unsupported CONTAINER_CLI={cli}")
     dns = os.environ.get("CODEX_FIREWALL_DNS_TOOL", "dig")
     if dns not in {"dig", "kdig", "drill"}: fail(f"unsupported CODEX_FIREWALL_DNS_TOOL={dns}")
     version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT); cache = Path(os.environ.get("DNF_CACHE_DIR", ROOT/".build-cache/dnf-fedora-44")).resolve()
     (cache/"dnf").mkdir(parents=True, exist_ok=True); (cache/"libdnf5").mkdir(parents=True, exist_ok=True); base = [cli, "build" if cli == "podman" else "bud"]
+    subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
+      "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     for name in selected:
-        file = generate(read_profile(name)); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
-        cmd = base + ["--layers", "-t", candidate, "-f", str(file), "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
+        file = generate(profiles[name], common=profiles["default"]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
+        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
           "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro", "."]
         subprocess.run(cmd, cwd=ROOT, check=True); promote(cli, candidate, name)
-    subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
-      "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     return 0
 if __name__ == "__main__":
     try: raise SystemExit(build(sys.argv[1:]))

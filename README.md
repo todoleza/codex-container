@@ -30,9 +30,15 @@ Podman as an override. The runtime image is generated from `Dockerfile.in`;
 It validates profile symlinks and expands the selected `container-deps/dnf/*.dnf`
 components into separate DNF install layers. Runtime builds
 also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
-set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. The DNF cache only
-avoids repeated package downloads; the explicit builder layer cache is what
+set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. Generated DNF
+install commands enable `keepcache`, so RPM payloads remain in this cache for
+other profiles and later cold layers. The explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
+Every generated Containerfile has an identical internal `codex-common` stage
+containing the default packages, SOPS, runtime files, and user setup. Profile
+dependencies derive directly from that stage, and the staged Codex artifact is
+installed only in the final `codex-profile` stage. A Codex-only update therefore
+leaves the common and profile dependency layers reusable.
 Selected `container-deps/collections/*.yml` drop-ins are folded into an Ansible
 collection requirements file and installed into the runtime image with
 `ansible-galaxy collection install`.
@@ -43,9 +49,11 @@ With no selector, the builder creates the lean `codex:default` image. Use
 repeated or comma-separated `--profile` values to build exactly those profiles,
 or `--all-profiles` (optionally with `--no-profile`). Available profiles are
 `default`, `infra`, `python`, `media`, and `full`. Each successful build first
-uses a candidate tag, rotates the existing image to `codex:prev-<profile>`, and
-then promotes `codex:<profile>`; default also updates `codex:latest`. A failed
-build does not rotate the current or previous image.
+builds the hard-dependency `codex-firewall` image, then builds the selected
+runtime profiles. Each runtime build uses a candidate tag, rotates the existing
+image to `codex:prev-<profile>`, and then promotes `codex:<profile>`; default
+also updates `codex:latest`. A failed runtime build does not rotate its current
+or previous image.
 
 Generated evidence is retained under
 `.build-cache/profiles/<profile>/Containerfile`, with supporting collection
@@ -54,6 +62,12 @@ builder's local layer store. `container-deps/copr/` accepts declarative `.copr`
 files (`OWNER/PROJECT [CHROOT]`), while `container-deps/repos/` accepts literal
 `.repo` files. Literal repositories do not automatically add their domains to
 the firewall allowlist.
+
+DNF component prefixes encode the cache-oriented order: common agent and
+secrets components (`10`-`30`), infrastructure (`40`-`42`), Python (`50`),
+media (`60`), and disabled components (`90`). This lets `media` reuse the
+Python prefix and `full` reuse the infrastructure prefix without making one
+published profile image inherit another.
 
 The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps

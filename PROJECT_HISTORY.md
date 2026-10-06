@@ -1,5 +1,59 @@
 # Project History
 
+## 2026-10-06 - Build the firewall dependency first
+
+### Changed
+- Image orchestration now builds `codex-firewall` before every selected runtime
+  profile and stops before runtime builds if the firewall build fails.
+
+### Why
+- The firewall sidecar is a hard runtime dependency, so producing runtime
+  images before validating their required companion image inverted the actual
+  startup dependency order.
+
+### Validation
+- Mocked default and all-profile builds assert that the firewall build is the
+  first image build command.
+
+## 2026-10-06 - Retain RPM payloads in the shared DNF cache
+
+### Changed
+- Generated DNF install commands now enable `keepcache`, including the
+  conditional `dnf5-plugins` installation used for COPR profiles.
+
+### Why
+- The cache directories were already shared across every profile build, but
+  DNF discarded successful transaction payloads. The first all-profile build
+  consequently downloaded the same 13 MiB `uv` transaction for both `python`
+  and `full`.
+
+### Evidence and validation
+- `build-images2.log` completed an unchanged all-profile rebuild in about 16
+  seconds with every runtime instruction served from Buildah's layer cache.
+- Profile-generation tests verify that every generated DNF install carries the
+  shared keep-cache option.
+
+## 2026-10-06 - Share the default build foundation
+
+### Changed
+- Generated profile Containerfiles now use an identical internal
+  `codex-common` stage containing the default dependencies, SOPS, runtime files,
+  and user setup.
+- Profile-only dependencies and collections follow the shared stage, while the
+  frequently changing Codex artifact is installed in the final layer.
+- Dependency prefixes now express common, infrastructure, Python, media, and
+  disabled groups so related profiles share useful instruction prefixes.
+
+### Why
+- The original per-profile `FROM fedora` files warmed some Buildah layers but
+  did not use default as a real common foundation. Profile divergence caused
+  repeated runtime setup and made the historical numeric ordering ineffective
+  for cross-profile reuse.
+
+### Validation
+- Generated common stages are byte-identical across all profiles, Codex appears
+  only in final stages, and profile relationship and canonical-order tests pass.
+
 ## 2026-10-06 - Consolidate dependency catalogs
 
 ### Changed
