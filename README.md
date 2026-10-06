@@ -34,6 +34,9 @@ set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. Generated DNF
 install commands enable `keepcache`, so RPM payloads remain in this cache for
 other profiles and later cold layers. The explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
+Runtime builds receive the build host's timezone as the `TZ` build argument;
+an explicit host `TZ` wins, followed by `/etc/localtime`, `timedatectl`, and a
+final `UTC` fallback.
 Every generated Containerfile has an identical internal `codex-common` stage
 containing the default packages, SOPS, runtime files, and user setup. Profile
 dependencies derive directly from that stage, and the staged Codex artifact is
@@ -54,6 +57,14 @@ runtime profiles. Each runtime build uses a candidate tag, rotates the existing
 image to `codex:prev-<profile>`, and then promotes `codex:<profile>`; default
 also updates `codex:latest`. A failed runtime build does not rotate its current
 or previous image.
+
+The launcher discovers available profiles from canonical local
+`codex:<profile>` images carrying a matching `codex.container.profile` label.
+Use `./run-in-container.sh profiles` or `--list-profiles` for a table of local
+profiles, image tags, Codex versions, and image IDs. Normal launches require
+the selected local image; an explicit `CONTAINER_IMAGE` remains the override.
+Workspace inspection, entry, copying, and cleanup remain available if a
+previously used image has been removed.
 
 Generated evidence is retained under
 `.build-cache/profiles/<profile>/Containerfile`, with supporting collection

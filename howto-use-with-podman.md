@@ -53,6 +53,9 @@ override. Override the DNF cache location with
 `DNF_CACHE_DIR=/path/to/cache ./build-images.sh`. The mounted DNF cache reduces
 package downloads because every generated install enables DNF `keepcache`;
 the builder layer cache is what skips unchanged DNF install steps entirely.
+The build driver detects the build host's timezone and supplies it as the
+runtime image's `TZ` build argument. Detection uses an explicit host `TZ`, the
+`/etc/localtime` zoneinfo link, or `timedatectl`, with `UTC` as the fallback.
 
 All profile Containerfiles contain the same internal `codex-common` stage with
 the default packages, SOPS, runtime files, and user setup. Profile-specific
@@ -490,12 +493,26 @@ table and records `mode: lifted` in the shared policy state. Run
 `firewall-reload` to restore enforcement from the configured policy files.
 # Image profiles
 
+List locally launchable profiles with either equivalent command:
+
+```bash
+./run-in-container.sh profiles
+./run-in-container.sh --list-profiles
+```
+
+The table is derived from canonical local `codex:<profile>` images whose
+`codex.container.profile` label matches the tag. Rollback and transient tags do
+not appear as separate profiles.
+
 Build the lean default with `./build-images.sh`, selected images with
 `./build-images.sh --profile infra,python`, or every image with
 `./build-images.sh --all-profiles`. Launch a workspace with, for example,
 `./run-in-container.sh --profile infra --wd /path/to/workspace`. The
 `CODEX_CONTAINER_PROFILE` environment setting is equivalent, while an explicit
 `CONTAINER_IMAGE` overrides the derived `codex:<profile>` image name.
+Without that explicit override, starting or replacing a workspace requires the
+selected canonical image to exist locally. Commands that inspect, enter, copy,
+or remove an existing workspace continue to work after its image is removed.
 Every build invocation builds `codex-firewall` first because the firewall
 sidecar is a hard runtime dependency; selected Codex profile images follow only
 after that build succeeds.

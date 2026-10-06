@@ -103,6 +103,15 @@ detect_requested_profile() {
   done
 }
 
+validate_profile_name() {
+  local profile="$1"
+
+  if ! [[ "${profile}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "Error: invalid Codex container profile name: ${profile}" >&2
+    exit 1
+  fi
+}
+
 resolve_workspace_root() {
   local dir
   local git_root
@@ -243,10 +252,7 @@ fi
 if [ -n "${CLI_CODEX_CONTAINER_PROFILE}" ]; then
   CODEX_CONTAINER_PROFILE="${CLI_CODEX_CONTAINER_PROFILE}"
 fi
-case "${CODEX_CONTAINER_PROFILE}" in
-  default|infra|python|media|full) ;;
-  *) echo "Error: unknown Codex container profile: ${CODEX_CONTAINER_PROFILE}" >&2; exit 1 ;;
-esac
+validate_profile_name "${CODEX_CONTAINER_PROFILE}"
 CONTAINER_IMAGE_EXPLICIT=0
 if [ -n "${CONTAINER_IMAGE+x}" ]; then
   CONTAINER_IMAGE_EXPLICIT=1
@@ -556,6 +562,80 @@ parse_codex_version_from_text() {
   sed -n 's/.*\([0-9][0-9.]*[0-9]\).*/\1/p' | head -1
 }
 
+inspect_image_label() {
+  local image="$1"
+  local label="$2"
+
+  podman image inspect \
+    --format "{{ index .Config.Labels \"${label}\" }}" \
+    "${image}" 2>/dev/null
+}
+
+discover_local_profiles() {
+  local image_ids
+  local image_id
+  local profile
+  local canonical_profile
+
+  if ! image_ids=$(podman images --filter label=codex.container.profile --format '{{.ID}}'); then
+    echo "Error: failed to query local Codex profile images." >&2
+    return 1
+  fi
+
+  while IFS= read -r image_id; do
+    [ -n "${image_id}" ] || continue
+    profile=$(inspect_image_label "${image_id}" codex.container.profile || true)
+    [[ "${profile}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    podman image exists "codex:${profile}" 2>/dev/null || continue
+    canonical_profile=$(inspect_image_label "codex:${profile}" codex.container.profile || true)
+    [ "${canonical_profile}" = "${profile}" ] || continue
+    printf '%s\n' "${profile}"
+  done <<< "${image_ids}" | LC_ALL=C sort -u
+}
+
+list_local_profiles() {
+  local profiles
+  local profile
+  local image
+  local version
+  local image_id
+
+  profiles=$(discover_local_profiles) || return 1
+  printf '%-18s %-28s %-16s %s\n' PROFILE IMAGE 'CODEX VERSION' 'IMAGE ID'
+  while IFS= read -r profile; do
+    [ -n "${profile}" ] || continue
+    image="codex:${profile}"
+    version=$(inspect_image_label "${image}" codex.cli.version || true)
+    if [ -z "${version}" ] || [ "${version}" = "<no value>" ]; then
+      version="-"
+    fi
+    image_id=$(podman image inspect --format '{{.Id}}' "${image}" 2>/dev/null || true)
+    image_id="${image_id#sha256:}"
+    image_id="${image_id:0:12}"
+    [ -n "${image_id}" ] || image_id="-"
+    printf '%-18s %-28s %-16s %s\n' "${profile}" "${image}" "${version}" "${image_id}"
+  done <<< "${profiles}"
+}
+
+require_runtime_profile_image() {
+  local image_profile
+
+  if [ "${CONTAINER_IMAGE_EXPLICIT}" = "1" ]; then
+    return 0
+  fi
+  if ! podman image exists "${CONTAINER_IMAGE}" 2>/dev/null; then
+    echo "Error: local image ${CONTAINER_IMAGE} for profile ${CODEX_CONTAINER_PROFILE} does not exist." >&2
+    echo "List available profiles with: $0 profiles" >&2
+    return 1
+  fi
+  image_profile=$(inspect_image_label "${CONTAINER_IMAGE}" codex.container.profile || true)
+  if [ "${image_profile}" != "${CODEX_CONTAINER_PROFILE}" ]; then
+    echo "Error: local image ${CONTAINER_IMAGE} does not carry matching profile label ${CODEX_CONTAINER_PROFILE}." >&2
+    echo "List available profiles with: $0 profiles" >&2
+    return 1
+  fi
+}
+
 detect_image_label_codex_version() {
   local version=""
 
@@ -664,6 +744,8 @@ usage() {
   cat <<'EOF'
 Usage:
   run-in-container.sh [--profile NAME] [--wd DIR] [CODEX_ARGS...]
+  run-in-container.sh profiles
+  run-in-container.sh --list-profiles
   run-in-container.sh list
   run-in-container.sh [--id ID|--wd DIR] status [ID]
   run-in-container.sh [--id ID|--wd DIR] name [ID]
@@ -683,6 +765,7 @@ Usage:
 
 Launcher commands:
   help          Show this help. Use --help for Codex CLI help.
+  profiles      List locally available Codex profile images.
   list          List known workspace containers.
   status        Show resolved workspace container names and state.
   name          Print the resolved app container name.
@@ -700,10 +783,11 @@ Launcher commands:
   copy, push    Copy from the host into the workspace container.
   pull, fetch   Copy from the workspace container to the host.
 
-The launcher accepts --profile default|infra|python|media|full, --wd, and --id. Other dash arguments are passed
-to Codex. Relative container copy paths resolve under the app container's
-workspace path. Local copy paths are resolved to absolute host paths before
-calling podman cp.
+The launcher accepts --profile NAME, --list-profiles, --wd, and --id. Use the
+profiles command to discover valid local profile images. Other dash arguments
+are passed to Codex. Relative container copy paths resolve under the app
+container's workspace path. Local copy paths are resolved to absolute host
+paths before calling podman cp.
 EOF
 }
 
@@ -896,6 +980,15 @@ parse_args() {
         CODEX_CONTAINER_PROFILE="$2"
         shift 2
         ;;
+      --list-profiles)
+        ACTION="profiles"
+        shift
+        if [ "$#" -ne 0 ]; then
+          echo "Error: --list-profiles does not accept arguments." >&2
+          exit 1
+        fi
+        return
+        ;;
       --work_dir)
         echo "Error: --work_dir has been replaced by --wd." >&2
         exit 1
@@ -911,7 +1004,7 @@ parse_args() {
         ;;
       *)
         case "$1" in
-          help|list|status|name|spawn|enter|shell|rootenter|rootshell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
+          help|profiles|list|status|name|spawn|enter|shell|rootenter|rootshell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
             ACTION="$1"
             shift
             ACTION_ARGS=("$@")
@@ -1972,10 +2065,12 @@ start_new_pod() {
 parse_args "$@"
 apply_trailing_selector
 
-case "${CODEX_CONTAINER_PROFILE}" in
-  default|infra|python|media|full) ;;
-  *) echo "Error: unknown Codex container profile: ${CODEX_CONTAINER_PROFILE}" >&2; exit 1 ;;
-esac
+validate_profile_name "${CODEX_CONTAINER_PROFILE}"
+
+if [ "${ACTION}" = "profiles" ] && [ "${#ACTION_ARGS[@]}" -ne 0 ]; then
+  echo "Error: profiles does not accept arguments." >&2
+  exit 1
+fi
 
 if [ "${ACTION}" = "help" ]; then
   usage
@@ -1988,6 +2083,11 @@ REGISTRY_ROOT="${RUNTIME_BASE_DIR}/codex-container/workspaces"
 if ! command -v podman >/dev/null 2>&1; then
   echo "Error: podman is not installed." >&2
   exit 1
+fi
+
+if [ "${ACTION}" = "profiles" ]; then
+  list_local_profiles
+  exit $?
 fi
 
 snapshot_reexec_if_needed "$@"
@@ -2019,6 +2119,7 @@ fi
 REQUESTED_WORK_DIR="$(realpath -m "$WORK_DIR")"
 WORK_DIR=$(resolve_workspace_root "$WORK_DIR")
 load_selected_workspace_env_if_needed
+validate_profile_name "${CODEX_CONTAINER_PROFILE}"
 refresh_workspace_runtime_names
 refresh_app_work_dir
 
@@ -2118,6 +2219,17 @@ fi
 case "${ACTION}" in
   start|spawn|replace|respawn)
     validate_sidecars
+    ;;
+esac
+
+case "${ACTION}" in
+  start|spawn)
+    if ! app_running; then
+      require_runtime_profile_image
+    fi
+    ;;
+  replace|respawn)
+    require_runtime_profile_image
     ;;
 esac
 

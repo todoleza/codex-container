@@ -1,5 +1,39 @@
 # Project History
 
+## 2026-10-06 - Discover launcher profiles from local images
+
+### Changed
+- Added `profiles` and `--list-profiles`, which report canonical local Codex
+  profile images and their version and image metadata.
+- Replaced launcher profile-name hardcoding with label-backed local-image
+  validation at pod creation boundaries.
+
+### Why
+- The launcher duplicated the build system's profile names, so adding or
+  retaining a locally built profile also required editing launcher source.
+- Image removal must not prevent operators from inspecting, entering, copying
+  from, or cleaning up an existing workspace.
+
+### Validation
+- Launcher tests cover discovery filtering, stable table output, an unknown-to-
+  source local profile, missing-image safety, lifecycle management, and the
+  explicit image override.
+
+## 2026-10-06 - Derive runtime image timezone from the build host
+
+### Changed
+- Runtime profile builds now receive an explicit `TZ` build argument detected
+  from the build host, with a `UTC` fallback.
+
+### Why
+- Generated Containerfiles declared `ARG TZ`, but orchestration did not supply
+  it, producing one missing-argument warning for every selected profile and an
+  empty image timezone.
+
+### Validation
+- Unit coverage checks environment and `/etc/localtime` detection, and the
+  mocked build verifies that the detected timezone reaches Buildah.
+
 ## 2026-10-06 - Build the firewall dependency first
 
 ### Changed

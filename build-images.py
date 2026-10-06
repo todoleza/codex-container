@@ -199,6 +199,19 @@ def freshness(version: str, kind: str, batch: bool, root: Path) -> str:
 def image_exists(cli: str, image: str) -> bool:
     cmd = [cli, "image", "exists", image] if cli == "podman" else [cli, "inspect", "--type", "image", image]
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+def detect_host_timezone(environment: dict[str, str] | None = None, localtime: Path = Path("/etc/localtime")) -> str:
+    environment = os.environ if environment is None else environment
+    if timezone := environment.get("TZ", "").strip(): return timezone
+    if localtime.is_symlink():
+        target = os.readlink(localtime)
+        for prefix in ("/usr/share/zoneinfo/", "../usr/share/zoneinfo/"):
+            if target.startswith(prefix): return target.removeprefix(prefix)
+    try:
+        result = subprocess.run(["timedatectl", "show", "--property=Timezone", "--value"], text=True, capture_output=True, timeout=2)
+        if result.returncode == 0 and (timezone := result.stdout.strip()): return timezone
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "UTC"
 def promote(cli: str, candidate: str, profile: str):
     current, previous = f"codex:{profile}", f"codex:prev-{profile}"
     if image_exists(cli, current): subprocess.run([cli, "tag", current, previous], check=True)
@@ -215,13 +228,14 @@ def build(argv: list[str]) -> int:
     if cli not in {"buildah", "podman"}: fail(f"unsupported CONTAINER_CLI={cli}")
     dns = os.environ.get("CODEX_FIREWALL_DNS_TOOL", "dig")
     if dns not in {"dig", "kdig", "drill"}: fail(f"unsupported CODEX_FIREWALL_DNS_TOOL={dns}")
+    timezone = detect_host_timezone()
     version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT); cache = Path(os.environ.get("DNF_CACHE_DIR", ROOT/".build-cache/dnf-fedora-44")).resolve()
     (cache/"dnf").mkdir(parents=True, exist_ok=True); (cache/"libdnf5").mkdir(parents=True, exist_ok=True); base = [cli, "build" if cli == "podman" else "bud"]
     subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
       "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     for name in selected:
         file = generate(profiles[name], common=profiles["default"]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
-        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
+        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
           "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro", "."]

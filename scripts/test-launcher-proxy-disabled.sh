@@ -16,6 +16,13 @@ case "$1" in
   container)
     [ "$2" = "exists" ] && exit 1
     ;;
+  image)
+    [ "$2" = "exists" ] && exit 0
+    if [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [ "$4" = "{{ index .Config.Labels \"codex.container.profile\" }}" ]; then
+      printf '%s\n' "${5#codex:}"
+      exit 0
+    fi
+    ;;
   pod)
     [ "$2" = "exists" ] && exit 1
     [ "$2" = "create" ] && exit 0

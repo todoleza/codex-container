@@ -30,6 +30,8 @@ unselected. Generated Containerfiles are retained per profile under
 `.build-cache/profiles/` and use the shared DNF cache and builder layer store.
 Generated DNF installs enable `keepcache`, retaining downloaded RPM payloads in
 that shared cache across profile branches and later builds.
+The build driver derives `TZ` from the build host and passes it explicitly to
+every runtime profile build, falling back to `UTC` when host detection fails.
 
 Each generated Containerfile builds an identical internal `codex-common` stage
 from the default profile's repositories and packages plus SOPS, runtime files,
@@ -43,6 +45,11 @@ conditional Fedora COPR support and enablement, DNF components, then Ansible
 collections. Builds use candidate tags so a successful promotion retains one
 `codex:prev-<profile>` rollback image. The launcher includes the selected
 profile in workspace identity, allowing profiles for one checkout to coexist.
+The launcher discovers launchable profiles from matching local
+`codex:<profile>` tags and `codex.container.profile` labels rather than a
+hardcoded name list. It validates image availability only before creating or
+replacing runtime resources, preserving management access after image removal;
+an explicit `CONTAINER_IMAGE` bypasses canonical image lookup.
 The build orchestrator always builds the common `codex-firewall` image before
 any selected runtime profile because the firewall sidecar is a hard runtime
 dependency; a firewall build failure prevents runtime image builds.

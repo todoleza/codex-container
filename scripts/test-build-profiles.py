@@ -55,6 +55,12 @@ class ProfilesTest(unittest.TestCase):
         self.assertEqual(m.selection(["--all", "--no-profile", "full,media"], m.PROFILE_ORDER)[1], ("default", "infra", "python"))
         for args in (["--profile","bogus"],["--profile","infra,infra"],["--no-profile","infra"],["--all","--profile","infra"]):
             with self.assertRaises(SystemExit): m.selection(args, m.PROFILE_ORDER)
+    def test_host_timezone_detection(self):
+        self.assertEqual(m.detect_host_timezone({"TZ": "Europe/Prague"}), "Europe/Prague")
+        with tempfile.TemporaryDirectory() as td:
+            localtime = Path(td)/"localtime"
+            localtime.symlink_to("../usr/share/zoneinfo/America/New_York")
+            self.assertEqual(m.detect_host_timezone({}, localtime), "America/New_York")
     def fixture(self):
         temp = tempfile.TemporaryDirectory(); root = Path(temp.name)
         for d in ("container-deps/dnf","container-deps/copr","container-deps/repos","container-deps/collections","container-profiles/default/dnf"): (root/d).mkdir(parents=True, exist_ok=True)

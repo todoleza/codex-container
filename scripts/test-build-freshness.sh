@@ -14,13 +14,14 @@ printf '%s\n' "$*" >> "${BUILDAH_LOG}"
 case "$1" in inspect) exit 1 ;; esac
 EOF
 chmod 755 "${tmpdir}/bin/curl" "${tmpdir}/bin/buildah"
-export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache"
+export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache" TZ="Europe/Prague"
 (cd "${repo_root}" && ./build-images.sh --batch)
 grep -Eq 'bud --layers --target codex-profile -t codex:candidate-default-' "${BUILDAH_LOG}"
 grep -Fq -- '--target codex-profile' "${BUILDAH_LOG}"
 grep -Fq 'tag codex:default codex:latest' "${BUILDAH_LOG}"
 grep -Fq 'bud --layers -t codex-firewall' "${BUILDAH_LOG}"
 grep -Fq -- '--label codex.container.profile=default' "${BUILDAH_LOG}"
+grep -Fq -- '--build-arg TZ=Europe/Prague' "${BUILDAH_LOG}"
 firewall_line="$(grep -n -m1 'bud --layers -t codex-firewall' "${BUILDAH_LOG}" | cut -d: -f1)"
 runtime_line="$(grep -n -m1 -- '--target codex-profile' "${BUILDAH_LOG}" | cut -d: -f1)"
 test "${firewall_line}" -lt "${runtime_line}"

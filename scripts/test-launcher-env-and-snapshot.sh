@@ -40,6 +40,14 @@ case "$1" in
     }
     ;;
   image)
+    if [ "$2" = "exists" ]; then
+      exit 0
+    fi
+    if [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [ "$4" = "{{ index .Config.Labels \"codex.container.profile\" }}" ]; then
+      image="$5"
+      printf '%s\n' "${image#codex:}"
+      exit 0
+    fi
     if [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [ "$4" = "{{ index .Config.Labels \"codex.cli.version\" }}" ]; then
       printf '%s\n' "${FAKE_IMAGE_CODEX_VERSION:-}"
       exit 0
