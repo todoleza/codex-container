@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-PROFILE_ORDER = ("default", "infra", "python", "media", "full")
+BASE_PROFILE = "default"
+PROFILE_RELATIONSHIPS = (("python", "media"), ("python", "full"), ("media", "full"), ("infra", "full"))
 KINDS = {"dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr", {".copr"}),
          "repos": ("container-deps/repos", {".repo"}), "collections": ("container-deps/collections", {".yml", ".yaml"})}
 COPR_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.:+-]+)?$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:*?-]*$")
 MEMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+PROFILE_RE = MEMBER_RE
 DNF_INSTALL_OPTIONS = "--setopt=install_weak_deps=False --setopt=keepcache=True"
 
 class BuildError(RuntimeError): pass
@@ -36,10 +38,13 @@ def parse_copr(path: Path) -> tuple[str, str | None]:
     parts = lines[0].split(); return parts[0], parts[1] if len(parts) == 2 else None
 
 def discover_profiles(root: Path = ROOT) -> tuple[str, ...]:
-    base = root / "container-profiles"; found = {p.name for p in base.iterdir() if p.is_dir()} if base.is_dir() else set()
-    if extra := found - set(PROFILE_ORDER): fail(f"unknown profile directories: {', '.join(sorted(extra))}")
-    if missing := set(PROFILE_ORDER) - found: fail(f"missing profiles: {', '.join(sorted(missing))}")
-    return tuple(p for p in PROFILE_ORDER if p in found)
+    base = root / "container-profiles"
+    found = {p.name for p in base.iterdir() if p.is_dir()} if base.is_dir() else set()
+    if invalid := {name for name in found if not PROFILE_RE.fullmatch(name)}:
+        fail(f"invalid profile directory names: {', '.join(sorted(invalid))}")
+    if BASE_PROFILE not in found:
+        fail(f"missing base profile: {BASE_PROFILE}")
+    return (BASE_PROFILE, *sorted(found - {BASE_PROFILE}))
 
 def read_profile(name: str, root: Path = ROOT) -> Profile:
     members, package_owner = {}, {}
@@ -86,12 +91,14 @@ def validate_profile_relationships(profiles: dict[str, Profile]) -> None:
                 names = ", ".join(sorted(path.name for path in missing))
                 fail(f"profile {child} must include {parent} {kind} membership: {names}")
 
-    for name in PROFILE_ORDER[1:]:
-        require_subset("default", name)
-    require_subset("python", "media")
-    require_subset("python", "full")
-    require_subset("media", "full")
-    require_subset("infra", "full")
+    if BASE_PROFILE not in profiles:
+        fail(f"missing base profile: {BASE_PROFILE}")
+    for name in profiles:
+        if name != BASE_PROFILE:
+            require_subset(BASE_PROFILE, name)
+    for parent, child in PROFILE_RELATIONSHIPS:
+        if parent in profiles and child in profiles:
+            require_subset(parent, child)
 
 def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[str]:
     steps: list[str] = []
@@ -113,7 +120,7 @@ def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[s
 def render(profile: Profile, template: str, root: Path = ROOT, common: Profile | None = None) -> tuple[str, str | None]:
     for marker in ("# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
         if template.count(marker) != 1: fail(f"Dockerfile.in must contain exactly one {marker} marker")
-    common = common or read_profile("default", root)
+    common = common or read_profile(BASE_PROFILE, root)
     common_sources = {kind: set(common.members[kind]) for kind in KINDS}
     head = ["# Generated file; retained as build evidence.", f"# Profile: {profile.name}"]
     for kind in KINDS:
@@ -164,7 +171,7 @@ def selection(argv: list[str], profiles: tuple[str, ...]):
         if len(values) != len(set(values)): p.error(f"duplicate {label} selection")
     if args.all_profiles and wanted: p.error("--profile conflicts with all-profile selection")
     if excluded and not args.all_profiles: p.error("--no-profile requires all-profile selection")
-    chosen = [x for x in profiles if x not in excluded] if args.all_profiles else (wanted or ["default"])
+    chosen = [x for x in profiles if x not in excluded] if args.all_profiles else (wanted or [BASE_PROFILE])
     if not chosen: p.error("profile selection is empty")
     return args, tuple(chosen)
 
@@ -234,7 +241,7 @@ def build(argv: list[str]) -> int:
     subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
       "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     for name in selected:
-        file = generate(profiles[name], common=profiles["default"]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
+        file = generate(profiles[name], common=profiles[BASE_PROFILE]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
         cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",

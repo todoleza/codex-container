@@ -248,6 +248,10 @@ fi
 : "${EXTRA_ALLOWED_DOMAINS:=}"
 : "${EXTRA_ALLOWED_IPV4:=}"
 : "${EXTRA_ALLOWED_IPV6:=}"
+PROFILE_SELECTION_EXPLICIT=0
+if [ -n "${CLI_CODEX_CONTAINER_PROFILE}" ] || [ -n "${CODEX_CONTAINER_PROFILE+x}" ]; then
+  PROFILE_SELECTION_EXPLICIT=1
+fi
 : "${CODEX_CONTAINER_PROFILE:=default}"
 if [ -n "${CLI_CODEX_CONTAINER_PROFILE}" ]; then
   CODEX_CONTAINER_PROFILE="${CLI_CODEX_CONTAINER_PROFILE}"
@@ -1309,8 +1313,10 @@ resolve_running_ancestor_state() {
   local path
   local app
   local profile
+  local seq
   local best_entry=""
   local best_len=0
+  local best_seq=0
 
   target_path="$(realpath -m "$1")"
 
@@ -1320,9 +1326,13 @@ resolve_running_ancestor_state() {
     path="$(read_state_file "${entry}" path)"
     app="$(read_state_file "${entry}" app)"
     profile="$(read_state_file "${entry}" profile)"
+    seq="$(read_state_file "${entry}" seq)"
     [ -n "${path}" ] || continue
     [ -n "${app}" ] || continue
-    [ "${profile:-default}" = "${CODEX_CONTAINER_PROFILE}" ] || continue
+    if [ "${PROFILE_SELECTION_EXPLICIT}" = "1" ] && [ "${profile:-default}" != "${CODEX_CONTAINER_PROFILE}" ]; then
+      continue
+    fi
+    [[ "${seq}" =~ ^[0-9]+$ ]] || seq=0
 
     if [[ "${target_path}" != "${path}" && "${target_path}" != "${path}/"* ]]; then
       continue
@@ -1330,9 +1340,10 @@ resolve_running_ancestor_state() {
     if [ "$(workspace_state "${app}")" != "running" ]; then
       continue
     fi
-    if (( ${#path} > best_len )); then
+    if (( ${#path} > best_len || (${#path} == best_len && seq > best_seq) )); then
       best_entry="${entry}"
       best_len="${#path}"
+      best_seq="${seq}"
     fi
   done
   shopt -u nullglob
@@ -2205,6 +2216,14 @@ if [ -z "${SELECTOR_ID}" ]; then
       SELECTOR_STATE_DIR="${ancestor_state_dir}"
       WORK_DIR="$(read_state_file "${SELECTOR_STATE_DIR}" path)"
       load_selected_workspace_env_if_needed
+      if [ "${PROFILE_SELECTION_EXPLICIT}" = "0" ]; then
+        CODEX_CONTAINER_PROFILE="$(read_state_file "${SELECTOR_STATE_DIR}" profile)"
+        CODEX_CONTAINER_PROFILE="${CODEX_CONTAINER_PROFILE:-default}"
+        if [ "${CONTAINER_IMAGE_EXPLICIT}" = "0" ]; then
+          CONTAINER_IMAGE="codex:${CODEX_CONTAINER_PROFILE}"
+        fi
+        validate_profile_name "${CODEX_CONTAINER_PROFILE}"
+      fi
       refresh_workspace_runtime_names
       refresh_app_work_dir
     fi

@@ -15,8 +15,9 @@ class ProfilesTest(unittest.TestCase):
         self.assertFalse((ROOT/"container-collections").exists())
 
     def test_real_membership(self):
-        self.assertEqual(m.discover_profiles(), m.PROFILE_ORDER)
-        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        expected = ("default", *sorted(path.name for path in (ROOT/"container-profiles").iterdir() if path.is_dir() and path.name != "default"))
+        self.assertEqual(m.discover_profiles(), expected)
+        profiles = {name: m.read_profile(name) for name in expected}
         m.validate_profile_relationships(profiles)
         default, full = profiles["default"], profiles["full"]
         dp = sum((m.parse_dnf(p) for p in default.members["dnf"]), [])
@@ -26,7 +27,7 @@ class ProfilesTest(unittest.TestCase):
 
     def test_shared_stage_and_canonical_order(self):
         template = (ROOT/"Dockerfile.in").read_text()
-        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        profiles = {name: m.read_profile(name) for name in m.discover_profiles()}
         common_stages = []
         for profile in profiles.values():
             text, _ = m.render(profile, template, common=profiles["default"])
@@ -43,18 +44,28 @@ class ProfilesTest(unittest.TestCase):
         self.assertLess(positions[-1], full.index("ansible-galaxy collection install"))
 
     def test_profile_relationship_validation(self):
-        profiles = {name: m.read_profile(name) for name in m.PROFILE_ORDER}
+        profiles = {name: m.read_profile(name) for name in m.discover_profiles()}
         media_members = dict(profiles["media"].members)
         media_members["dnf"] = tuple(path for path in media_members["dnf"] if path.name != "50-python.dnf")
         profiles["media"] = m.Profile("media", media_members)
         with self.assertRaises(m.BuildError):
             m.validate_profile_relationships(profiles)
     def test_selectors(self):
-        self.assertEqual(m.selection([], m.PROFILE_ORDER)[1], ("default",))
-        self.assertEqual(m.selection(["--profile", "media,infra"], m.PROFILE_ORDER)[1], ("media", "infra"))
-        self.assertEqual(m.selection(["--all", "--no-profile", "full,media"], m.PROFILE_ORDER)[1], ("default", "infra", "python"))
+        profiles = ("default", "full", "infra", "media", "python", "typesetting")
+        self.assertEqual(m.selection([], profiles)[1], ("default",))
+        self.assertEqual(m.selection(["--profile", "media,infra"], profiles)[1], ("media", "infra"))
+        self.assertEqual(m.selection(["--all", "--no-profile", "full,media,typesetting"], profiles)[1], ("default", "infra", "python"))
         for args in (["--profile","bogus"],["--profile","infra,infra"],["--no-profile","infra"],["--all","--profile","infra"]):
-            with self.assertRaises(SystemExit): m.selection(args, m.PROFILE_ORDER)
+            with self.assertRaises(SystemExit): m.selection(args, profiles)
+    def test_profile_discovery_is_directory_driven(self):
+        temp, root = self.fixture()
+        with temp:
+            custom = root/"container-profiles/typesetting/dnf"
+            custom.mkdir(parents=True)
+            (custom/"a.dnf").symlink_to("../../../container-deps/dnf/a.dnf")
+            self.assertEqual(m.discover_profiles(root), ("default", "typesetting"))
+            profiles = {name: m.read_profile(name, root) for name in m.discover_profiles(root)}
+            m.validate_profile_relationships(profiles)
     def test_host_timezone_detection(self):
         self.assertEqual(m.detect_host_timezone({"TZ": "Europe/Prague"}), "Europe/Prague")
         with tempfile.TemporaryDirectory() as td:

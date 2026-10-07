@@ -25,9 +25,11 @@ through one container-owned daemon process and shared control socket.
 Runtime dependencies are selected through relative symlinks under
 `container-profiles/<name>/{dnf,copr,repos,collections}`. The matching shared
 catalogs live under `container-deps/{dnf,copr,repos,collections}`.
-The profiles are `default`, `infra`, `python`, `media`, and `full`; SCAD remains
-unselected. Generated Containerfiles are retained per profile under
-`.build-cache/profiles/` and use the shared DNF cache and builder layer store.
+The build driver discovers profile names from those directories, requires
+`default` as the base membership of every other profile, and does not require a
+source edit when a profile is added. SCAD remains unselected. Generated
+Containerfiles are retained per profile under `.build-cache/profiles/` and use
+the shared DNF cache and builder layer store.
 Generated DNF installs enable `keepcache`, retaining downloaded RPM payloads in
 that shared cache across profile branches and later builds.
 The build driver derives `TZ` from the build host and passes it explicitly to
@@ -50,6 +52,9 @@ The launcher discovers launchable profiles from matching local
 hardcoded name list. It validates image availability only before creating or
 replacing runtime resources, preserving management access after image removal;
 an explicit `CONTAINER_IMAGE` bypasses canonical image lookup.
+Without an explicit profile selection, workspace lookup may adopt a running
+record for another profile at the same or nearest ancestor path. Explicit
+`--profile` and `CODEX_CONTAINER_PROFILE` selections remain profile-scoped.
 The build orchestrator always builds the common `codex-firewall` image before
 any selected runtime profile because the firewall sidecar is a hard runtime
 dependency; a firewall build failure prevents runtime image builds.

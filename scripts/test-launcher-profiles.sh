@@ -63,8 +63,15 @@ case "$1" in
     ;;
   container)
     if [ "$2" = "exists" ]; then
+      [ -n "${FAKE_RUNNING_APP:-}" ] && [ "$3" = "${FAKE_RUNNING_APP}" ] && exit 0
       [ "${FAKE_APP_EXISTS:-0}" = "1" ] && exit 0
       exit 1
+    fi
+    ;;
+  inspect)
+    if [ "$2" = "--format" ] && [ "$3" = "{{.State.Running}}" ]; then
+      [ -n "${FAKE_RUNNING_APP:-}" ] && [ "$4" = "${FAKE_RUNNING_APP}" ] && printf 'true\n'
+      exit 0
     fi
     ;;
   pod)
@@ -140,3 +147,48 @@ CONTAINER_IMAGE=custom-override:test \
   "${repo_root}/run-in-container.sh" --profile missing --wd "${tmpdir}/override-work" spawn > "${tmpdir}/override.out"
 grep -Fq 'runtime image: custom-override:test' "${tmpdir}/override.out"
 grep -Fq 'runtime profile: missing' "${tmpdir}/override.out"
+
+# An implicit launch must prefer the newer running profile record over the
+# missing default-profile record for the same workspace. An explicit profile
+# selection remains authoritative.
+multi_work="${tmpdir}/multi-profile-work"
+mkdir -p "${multi_work}"
+registry="${XDG_RUNTIME_DIR}/codex-container/workspaces"
+mkdir -p "${registry}/state" "${registry}/by-seq" "${registry}/by-path-hash"
+for record in "default:5" "typesetting:6"; do
+  profile="${record%%:*}"
+  seq="${record##*:}"
+  hash="$(printf '%s' "${multi_work}:${profile}" | sha256sum | cut -c1-8)"
+  state_dir="${registry}/state/${hash}"
+  app="codex-multi-profile-work-${hash}-app"
+  mkdir -p "${state_dir}"
+  printf '%s\n' "${multi_work}" > "${state_dir}/path"
+  printf '%s\n' "${profile}" > "${state_dir}/profile"
+  printf '%s\n' "multi-profile-work" > "${state_dir}/alias"
+  printf '%s\n' "${hash}" > "${state_dir}/hash"
+  printf '%s\n' "${seq}" > "${state_dir}/seq"
+  printf '%s\n' "codex-multi-profile-work-${hash}" > "${state_dir}/pod"
+  printf '%s\n' "${app}" > "${state_dir}/app"
+  printf '%s\n' "codex-multi-profile-work-${hash}-fw" > "${state_dir}/fw"
+  printf '%s\n' "codex-multi-profile-work-${hash}-proxy" > "${state_dir}/proxy"
+  : > "${state_dir}/sidecars"
+  ln -s "../state/${hash}" "${registry}/by-seq/${seq}"
+  ln -s "../state/${hash}" "${registry}/by-path-hash/${hash}"
+done
+
+typesetting_hash="$(printf '%s' "${multi_work}:typesetting" | sha256sum | cut -c1-8)"
+typesetting_app="codex-multi-profile-work-${typesetting_hash}-app"
+: > "${PODMAN_LOG}"
+FAKE_RUNNING_APP="${typesetting_app}" \
+  "${repo_root}/run-in-container.sh" --wd "${multi_work}" spawn > "${tmpdir}/implicit-profile.out"
+grep -Fq "already running: ${typesetting_app}" "${tmpdir}/implicit-profile.out"
+if grep -Eq '^run |^pod create ' "${PODMAN_LOG}"; then
+  echo "implicit launch respawned the missing default profile instead of selecting the running profile" >&2
+  exit 1
+fi
+
+: > "${PODMAN_LOG}"
+FAKE_RUNNING_APP="${typesetting_app}" \
+  "${repo_root}/run-in-container.sh" --profile default --wd "${multi_work}" spawn > "${tmpdir}/explicit-profile.out"
+grep -Fq 'runtime profile: default' "${tmpdir}/explicit-profile.out"
+grep -Fq 'spawned: codex-multi-profile-work-' "${tmpdir}/explicit-profile.out"

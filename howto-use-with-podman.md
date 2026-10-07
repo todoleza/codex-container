@@ -211,10 +211,14 @@ from symlinks into per-workspace state directories.
 If a workspace container is already running and you start the launcher without
 an explicit launcher command, it enters the existing container. This also
 applies from subdirectories after workspace-root resolution, so starting from a
-nested path jumps to the parent workspace session. `replace` kills any existing
-workspace pod before normal startup. `respawn` kills any existing workspace pod,
-starts a fresh pod in the background, and exits without attaching. If there is
-nothing to kill, these commands print that and continue.
+nested path jumps to the parent workspace session. When no profile was selected
+explicitly, this lookup can adopt the running workspace's stored profile; if
+multiple profiles are running at the same path, the newest registry sequence is
+preferred. `--profile` and `CODEX_CONTAINER_PROFILE` keep lookup restricted to
+that profile. `replace` kills any existing workspace pod before normal startup.
+`respawn` kills any existing workspace pod, starts a fresh pod in the background,
+and exits without attaching. If there is nothing to kill, these commands print
+that and continue.
 
 After the app container starts successfully, it stays running when a Codex or
 shell session exits. Use `destroy`, `rm`, or `kill` when you want to remove the
@@ -301,12 +305,14 @@ top-level directory. Outside Git, the launcher walks upward to the nearest
 parent containing `.codex-container.env`; if none is found, it uses the
 requested directory as-is. When no marker identifies the parent, implicit
 workspace selection still prefers the longest running registered ancestor over
-a missing child workspace state. This keeps invocations from subdirectories
-attached to the same parent workspace pod. The parent workspace remains the
-mounted root, while app sessions start in the originally requested subdirectory
-when it is inside that workspace. The app container also mounts the workspace at
-its original host absolute path, which keeps Codex resume discovery and Git
-branch grouping aligned with host-side `~/.codex` session metadata.
+a missing child workspace state, including a running record that uses another
+profile when no profile was explicitly selected. This keeps invocations from
+subdirectories attached to the same parent workspace pod. The parent workspace
+remains the mounted root, while app sessions start in the originally requested
+subdirectory when it is inside that workspace. The app container also mounts
+the workspace at its original host absolute path, which keeps Codex resume
+discovery and Git branch grouping aligned with host-side `~/.codex` session
+metadata.
 
 For linked Git worktrees, the launcher also mounts the worktree's shared Git
 metadata into the app container at the absolute path recorded by the `.git`
@@ -506,8 +512,10 @@ not appear as separate profiles.
 
 Build the lean default with `./build-images.sh`, selected images with
 `./build-images.sh --profile infra,python`, or every image with
-`./build-images.sh --all-profiles`. Launch a workspace with, for example,
-`./run-in-container.sh --profile infra --wd /path/to/workspace`. The
+`./build-images.sh --all-profiles`. Build profile names come directly from
+directories under `container-profiles/`, so a new symlink-composed profile does
+not need to be registered in `build-images.py`. Launch a workspace with, for
+example, `./run-in-container.sh --profile infra --wd /path/to/workspace`. The
 `CODEX_CONTAINER_PROFILE` environment setting is equivalent, while an explicit
 `CONTAINER_IMAGE` overrides the derived `codex:<profile>` image name.
 Without that explicit override, starting or replacing a workspace requires the

@@ -50,13 +50,15 @@ default; pin it with `SOPS_VERSION=<version> ./build-images.sh`.
 
 With no selector, the builder creates the lean `codex:default` image. Use
 repeated or comma-separated `--profile` values to build exactly those profiles,
-or `--all-profiles` (optionally with `--no-profile`). Available profiles are
-`default`, `infra`, `python`, `media`, and `full`. Each successful build first
-builds the hard-dependency `codex-firewall` image, then builds the selected
-runtime profiles. Each runtime build uses a candidate tag, rotates the existing
-image to `codex:prev-<profile>`, and then promotes `codex:<profile>`; default
-also updates `codex:latest`. A failed runtime build does not rotate its current
-or previous image.
+or `--all-profiles` (optionally with `--no-profile`). Available build profiles
+are discovered from directories under `container-profiles/`; `default` is the
+required base, and every other profile must include its membership. Adding a
+valid profile directory and symlinks does not require a build-driver change.
+Each successful build first builds the hard-dependency `codex-firewall` image,
+then builds the selected runtime profiles. Each runtime build uses a candidate
+tag, rotates the existing image to `codex:prev-<profile>`, and then promotes
+`codex:<profile>`; default also updates `codex:latest`. A failed runtime build
+does not rotate its current or previous image.
 
 The launcher discovers available profiles from canonical local
 `codex:<profile>` images carrying a matching `codex.container.profile` label.

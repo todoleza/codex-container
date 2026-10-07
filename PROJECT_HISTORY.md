@@ -1,5 +1,26 @@
 # Project History
 
+## 2026-10-07 - Decouple build profiles and repair implicit workspace selection
+
+### Changed
+- Build profiles are now discovered from `container-profiles/`, with `default`
+  retained as the required common base instead of a hardcoded profile list.
+- An implicit launch can adopt the newest running profile record for the same
+  or nearest ancestor path; explicit profile choices remain profile-scoped.
+
+### Why
+- Adding the `typesetting` profile required editing `build-images.py`, which
+  contradicted the symlink-composed profile boundary.
+- A missing default-profile record hid a newer running `typesetting` record for
+  the same path and caused the default workspace to be spawned again.
+
+### Validation
+- `python3 scripts/test-build-profiles.py`
+- `bash scripts/test-launcher-profiles.sh`
+- All scripts matching `scripts/test-*.sh`
+- `bash -n run-in-container.sh scripts/test-launcher-profiles.sh`
+- `python3 -m py_compile build-images.py scripts/test-build-profiles.py`
+
 ## 2026-10-06 - Discover launcher profiles from local images
 
 ### Changed

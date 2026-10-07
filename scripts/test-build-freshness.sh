@@ -28,8 +28,9 @@ test "${firewall_line}" -lt "${runtime_line}"
 grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Containerfile"
 : > "${BUILDAH_LOG}"
 (cd "${repo_root}" && ./build-images.sh --all-profiles --batch)
-test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq 5
-for profile in default infra python media full; do
+mapfile -t build_profiles < <(find "${repo_root}/container-profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
+for profile in "${build_profiles[@]}"; do
   grep -Eq "bud --layers --target codex-profile -t codex:candidate-${profile}-" "${BUILDAH_LOG}"
 done
 test "$(grep -c 'bud --layers -t codex-firewall' "${BUILDAH_LOG}")" -eq 1

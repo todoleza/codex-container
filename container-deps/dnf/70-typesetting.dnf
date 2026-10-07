@@ -1,0 +1,4 @@
+make
+weasyprint
+poppler-utils
+google-noto-sans-fonts
