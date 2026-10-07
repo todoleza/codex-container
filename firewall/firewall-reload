@@ -31,6 +31,15 @@ nft_file="${tmpdir}/rules.nft"
 
 touch "${allowed_ipv4_file}" "${allowed_ipv6_file}" "${dns_ipv4_file}" "${dns_ipv6_file}"
 
+if ! [[ "${CODEX_FIREWALL_DNS_TIMEOUT}" =~ ^0\.[0-9]*[1-9][0-9]*$ ]]; then
+  echo "Error: CODEX_FIREWALL_DNS_TIMEOUT must be greater than zero and less than one second." >&2
+  exit 1
+fi
+if ! [[ "${CODEX_FIREWALL_DNS_TRIES}" =~ ^[1-5]$ ]]; then
+  echo "Error: CODEX_FIREWALL_DNS_TRIES must be between 1 and 5." >&2
+  exit 1
+fi
+
 emit_set_elements() {
   local file="$1"
 
@@ -84,62 +93,59 @@ resolve_domains() {
     | xargs -0 -r -P "${CODEX_FIREWALL_DNS_PARALLELISM}" -I{} bash -c '
     set -euo pipefail
     chunk="$1"
-    a_query="${chunk}.a"
-    aaaa_query="${chunk}.aaaa"
-    kdig_retries=0
-    if (( CODEX_FIREWALL_DNS_TRIES > 1 )); then
-      kdig_retries=$((CODEX_FIREWALL_DNS_TRIES - 1))
-    fi
+    run_query_attempt() {
+      local record_type="$1"
+      local query_file="$2"
 
-    query_a() {
       case "${CODEX_FIREWALL_DNS_TOOL}" in
         dig)
-          sed "s/$/ A/" "${chunk}" > "${a_query}"
-          dig +time="${CODEX_FIREWALL_DNS_TIMEOUT}" +tries="${CODEX_FIREWALL_DNS_TRIES}" +short -f "${a_query}" 2>/dev/null
+          timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" \
+            dig +timeout=1 +tries=1 +short -f "${query_file}" 2>/dev/null
           ;;
         kdig)
-          while IFS= read -r domain; do
-            printf "%s\nA\n" "${domain}"
-          done < "${chunk}" \
-            | xargs -r kdig +timeout="${CODEX_FIREWALL_DNS_TIMEOUT}" +retry="${kdig_retries}" +short 2>/dev/null
+          xargs -r timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" \
+            kdig +timeout=1 +retry=0 +short < "${query_file}" 2>/dev/null
           ;;
         drill)
-          while IFS= read -r domain; do
-            timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" drill -Q "${domain}" A 2>/dev/null || true
-          done < "${chunk}"
+          timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" bash -c '\''
+            record_type="$1"
+            query_file="$2"
+            while read -r domain _; do
+              drill -Q "${domain}" "${record_type}" 2>/dev/null || true
+            done < "${query_file}"
+          '\'' bash "${record_type}" "${query_file}"
           ;;
       esac
     }
 
-    query_aaaa() {
-      case "${CODEX_FIREWALL_DNS_TOOL}" in
-        dig)
-          sed "s/$/ AAAA/" "${chunk}" > "${aaaa_query}"
-          dig +time="${CODEX_FIREWALL_DNS_TIMEOUT}" +tries="${CODEX_FIREWALL_DNS_TRIES}" +short -f "${aaaa_query}" 2>/dev/null
-          ;;
-        kdig)
-          while IFS= read -r domain; do
-            printf "%s\nAAAA\n" "${domain}"
-          done < "${chunk}" \
-            | xargs -r kdig +timeout="${CODEX_FIREWALL_DNS_TIMEOUT}" +retry="${kdig_retries}" +short 2>/dev/null
-          ;;
-        drill)
-          while IFS= read -r domain; do
-            timeout "${CODEX_FIREWALL_DNS_TIMEOUT}" drill -Q "${domain}" AAAA 2>/dev/null || true
-          done < "${chunk}"
-          ;;
-      esac
+    query_with_retries() {
+      local record_type="$1"
+      local query_file="${chunk}.${record_type}"
+      local attempt
+      local status
+
+      sed "s/$/ ${record_type}/" "${chunk}" > "${query_file}"
+      for ((attempt = 1; attempt <= CODEX_FIREWALL_DNS_TRIES; attempt++)); do
+        if run_query_attempt "${record_type}" "${query_file}"; then
+          return 0
+        else
+          status=$?
+        fi
+      done
+      printf "Warning: %s DNS batch exhausted %s attempts (last status %s); continuing with valid answers only.\n" \
+        "${record_type}" "${CODEX_FIREWALL_DNS_TRIES}" "${status}" >&2
+      return 0
     }
 
-    query_a \
+    query_with_retries A \
       | while IFS= read -r record; do
         [[ "${record}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
         printf "4 %s\n" "${record}"
       done || true
 
-    query_aaaa \
+    query_with_retries AAAA \
       | while IFS= read -r record; do
-        [[ "${record}" == *:* ]] || continue
+        [[ "${record}" == *:* && "${record}" =~ ^[0-9A-Fa-f:]+$ ]] || continue
         printf "6 %s\n" "${record}"
       done || true
   ' bash {} > "${resolved_dns_file}"
@@ -155,11 +161,26 @@ load_dns_cache() {
   local cache_epoch
   local now
 
+  dns_cache_file_valid() {
+    local family="$1"
+    local file="$2"
+    local record
+
+    while IFS= read -r record; do
+      case "${family}" in
+        4) [[ "${record}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1 ;;
+        6) [[ "${record}" == *:* && "${record}" =~ ^[0-9A-Fa-f:]+$ ]] || return 1 ;;
+      esac
+    done < "${file}"
+  }
+
   if [ "${CODEX_FIREWALL_DNS_CACHE_TTL}" = "0" ]; then
     return 1
   fi
 
   [ -f "${cache_hash_file}" ] && [ -f "${cache_epoch_file}" ] && [ -f "${cache_ipv4_file}" ] && [ -f "${cache_ipv6_file}" ] || return 1
+  dns_cache_file_valid 4 "${cache_ipv4_file}" || return 1
+  dns_cache_file_valid 6 "${cache_ipv6_file}" || return 1
 
   domains_hash="$(sha256sum "${domains_sorted_file}" | awk '{print $1}')"
   cache_hash="$(sed -n '1p' "${cache_hash_file}")"

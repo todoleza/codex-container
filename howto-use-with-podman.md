@@ -90,6 +90,10 @@ CODEX_FIREWALL_DNS_TOOL=drill ./build-images.sh
 `knot-utils`; `drill` installs the small Alpine `drill` package. The selected
 tool is baked into the firewall image as `CODEX_FIREWALL_DNS_TOOL`, and can
 still be overridden at runtime for experiments when the binary exists.
+The default resolver path batches ten targets per invocation, bounds each
+invocation to 0.75 seconds, and makes at most five attempts. Resolver diagnostic
+text is ignored; exhausted batches continue with whatever valid addresses were
+returned.
 
 This produces:
 
@@ -247,6 +251,12 @@ Optional environment variables:
 ```bash
 CONTAINER_IMAGE=codex
 FIREWALL_CONTAINER_IMAGE=codex-firewall
+CODEX_FIREWALL_MODE=enforced
+CODEX_FIREWALL_DNS_TIMEOUT=0.75
+CODEX_FIREWALL_DNS_TRIES=5
+CODEX_FIREWALL_DNS_BATCH_SIZE=10
+CODEX_FIREWALL_DNS_PARALLELISM=32
+CODEX_FIREWALL_DNS_CACHE_TTL=300
 PROXY_CONTAINER_IMAGE=codex-firewall
 PROXY_ENABLE=0
 PROXY_RUNTIME_DIR_HOST=/run/user/$(id -u)/codex-<workspace>-<hash>-proxy
@@ -409,7 +419,21 @@ codex-firewall-policy --path
 
 The view includes configured domains and explicit IP/CIDR entries, resolved
 IPv4/IPv6 destinations from the last `firewall-reload`, DNS resolver addresses,
-and `mode: enforced` or `mode: lifted`.
+and `mode: enforced`, `mode: lifted`, or `mode: disabled`.
+
+Enforcement is the default and remains fail-closed. To start new resources
+without enforcing the nftables allowlist, use either:
+
+```bash
+./run-in-container.sh --no-firewall --wd /path/to/repo
+CODEX_FIREWALL_MODE=lifted ./run-in-container.sh --wd /path/to/repo
+```
+
+Lifted startup skips DNS resolution and calls `firewall-lift`. If the firewall
+container cannot be created or initialized, startup warns, records
+`mode: disabled`, disables the proxy relay if requested, and continues with the
+app container. This option applies only while creating or replacing resources;
+it does not change an already-running workspace.
 
 The proxy path is split in two:
 

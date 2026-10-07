@@ -1,5 +1,26 @@
 # Project History
 
+## 2026-10-07 - Harden DNS batches and support lifted startup
+
+### Changed
+- Batched resolver invocations now have a 750 ms deadline, make at most five
+  attempts, strictly filter addresses, and reject malformed cached results.
+- Added `--no-firewall` and `CODEX_FIREWALL_MODE=lifted`; enforced startup stays
+  fail-closed, while lifted startup tolerates a broken firewall container and
+  records `mode: disabled`.
+
+### Why
+- A transient `dig` diagnostic containing a colon passed the loose AAAA filter,
+  was cached as `;;`, and made the generated nftables transaction invalid.
+- Operators need an explicit way to start without enforcement even when the
+  firewall image or container is unavailable.
+
+### Validation
+- `bash scripts/test-firewall-policy.sh`
+- `bash scripts/test-launcher-firewall-mode.sh`
+- All scripts matching `scripts/test-*.sh`
+- Shell syntax checks and `git diff --check`
+
 ## 2026-10-07 - Decouple build profiles and repair implicit workspace selection
 
 ### Changed

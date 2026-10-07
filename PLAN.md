@@ -56,8 +56,9 @@ Without an explicit profile selection, workspace lookup may adopt a running
 record for another profile at the same or nearest ancestor path. Explicit
 `--profile` and `CODEX_CONTAINER_PROFILE` selections remain profile-scoped.
 The build orchestrator always builds the common `codex-firewall` image before
-any selected runtime profile because the firewall sidecar is a hard runtime
-dependency; a firewall build failure prevents runtime image builds.
+any selected runtime profile. Enforced startup treats the firewall sidecar as a
+hard runtime dependency; explicitly lifted startup treats it as best-effort. A
+firewall image build failure still prevents runtime image builds.
 
 DNF components use a canonical cache order: common (`10`-`30`), infrastructure
 (`40`-`42`), Python (`50`), media (`60`), and disabled (`90`). `media` therefore
@@ -126,11 +127,13 @@ Manual `fwenter` changes are visible to the app after the relevant
 `firewall-allow-*`, `firewall-reload`, or `firewall-lift` command updates the
 shared state. `firewall-lift` deletes only the `inet codex_firewall` table and
 records `CODEX_FIREWALL_MODE=lifted`; `firewall-reload` restores enforcement
-from the configured policy and records `CODEX_FIREWALL_MODE=enforced`.
+from the configured policy and records `CODEX_FIREWALL_MODE=enforced`. If an
+explicitly lifted startup cannot create or initialize the firewall container,
+the host writes `CODEX_FIREWALL_MODE=disabled` and starts the app without it.
 
 ### Control flow
 
-The wrapper programs the firewall with `podman exec`:
+In default enforced mode, the wrapper programs the firewall with `podman exec`:
 
 1. `firewall-init`
 2. `firewall-allow-domain ...`
@@ -138,6 +141,10 @@ The wrapper programs the firewall with `podman exec`:
 4. `firewall-reload`
 
 Only after those steps succeed does it start the Codex container.
+Resolver invocations batch domains, use a 750 ms outer deadline, retry up to
+five times, and discard non-address diagnostics. `--no-firewall` and
+`CODEX_FIREWALL_MODE=lifted` instead skip resolution and request
+`firewall-lift`; firewall setup failures in that explicit mode are nonfatal.
 
 ### Launcher defaults and stability
 

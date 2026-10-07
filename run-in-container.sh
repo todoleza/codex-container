@@ -273,6 +273,12 @@ fi
 : "${PROXY_UPSTREAM_HOST:=localhost}"
 : "${PROXY_UPSTREAM_PORT:=1080}"
 : "${CODEX_FIREWALL_POLICY_DIR:=/run/codex-firewall-policy}"
+: "${CODEX_FIREWALL_MODE:=enforced}"
+: "${CODEX_FIREWALL_DNS_TIMEOUT:=0.75}"
+: "${CODEX_FIREWALL_DNS_TRIES:=5}"
+: "${CODEX_FIREWALL_DNS_BATCH_SIZE:=10}"
+: "${CODEX_FIREWALL_DNS_PARALLELISM:=32}"
+: "${CODEX_FIREWALL_DNS_CACHE_TTL:=300}"
 : "${CODEX_SANDBOX_MODE:=danger-full-access}"
 : "${CODEX_APPROVAL_POLICY:=on-request}"
 : "${CODEX_DANGEROUS_BYPASS:=0}"
@@ -351,6 +357,7 @@ OPENAI_ALLOWED_DOMAINS="$(printf '%s\n' "${FINAL_ALLOWED_DOMAINS[@]}" | sort -u 
 PROXY_VOLUME_ARGS_ARRAY=()
 FIREWALL_POLICY_VOLUME_ARGS_ARRAY=()
 APP_POLICY_VOLUME_ARGS_ARRAY=()
+FIREWALL_AVAILABLE=0
 APP_GIT_VOLUME_ARGS_ARRAY=()
 CODEX_APP_ENV_ARGS_ARRAY=()
 SIDECAR_IDS_ARRAY=()
@@ -359,6 +366,7 @@ CODEX_EXTRA_ADD_DIRS=""
 ACTION="start"
 ACTION_ARGS=()
 START_ARGS=()
+CLI_NO_FIREWALL=0
 SELECTOR_ID=""
 SELECTOR_STATE_DIR=""
 WORK_DIR_SELECTED=0
@@ -747,7 +755,7 @@ write_optional_state_file() {
 usage() {
   cat <<'EOF'
 Usage:
-  run-in-container.sh [--profile NAME] [--wd DIR] [CODEX_ARGS...]
+  run-in-container.sh [--profile NAME] [--no-firewall] [--wd DIR] [CODEX_ARGS...]
   run-in-container.sh profiles
   run-in-container.sh --list-profiles
   run-in-container.sh list
@@ -787,10 +795,11 @@ Launcher commands:
   copy, push    Copy from the host into the workspace container.
   pull, fetch   Copy from the workspace container to the host.
 
-The launcher accepts --profile NAME, --list-profiles, --wd, and --id. Use the
-profiles command to discover valid local profile images. Other dash arguments
-are passed to Codex. Relative container copy paths resolve under the app
-container's workspace path. Local copy paths are resolved to absolute host
+The launcher accepts --profile NAME, --no-firewall, --list-profiles, --wd, and
+--id. --no-firewall starts new resources with lifted firewall enforcement. Use
+the profiles command to discover valid local profile images. Other dash
+arguments are passed to Codex. Relative container copy paths resolve under the
+app container's workspace path. Local copy paths are resolved to absolute host
 paths before calling podman cp.
 EOF
 }
@@ -984,6 +993,11 @@ parse_args() {
         CODEX_CONTAINER_PROFILE="$2"
         shift 2
         ;;
+      --no-firewall)
+        CLI_NO_FIREWALL=1
+        CODEX_FIREWALL_MODE=lifted
+        shift
+        ;;
       --list-profiles)
         ACTION="profiles"
         shift
@@ -1105,6 +1119,15 @@ prepare_firewall_policy_runtime_dir() {
     echo "Error: could not set firewall policy runtime dir permissions at ${FIREWALL_POLICY_RUNTIME_DIR_HOST}." >&2
     exit 1
   }
+}
+
+write_host_firewall_status() {
+  local mode="$1"
+
+  {
+    printf 'CODEX_FIREWALL_MODE=%s\n' "${mode}"
+    printf 'CODEX_FIREWALL_UPDATED_EPOCH=%s\n' "$(date +%s)"
+  } > "${FIREWALL_POLICY_RUNTIME_DIR_HOST}/status.env"
 }
 
 registry_init() {
@@ -1739,6 +1762,7 @@ print_startup_summary() {
   echo "runtime image: ${CONTAINER_IMAGE}"
   echo "runtime profile: ${CODEX_CONTAINER_PROFILE}"
   echo "firewall image: ${FIREWALL_CONTAINER_IMAGE}"
+  echo "firewall mode: ${CODEX_FIREWALL_MODE}"
   echo "proxy image: ${PROXY_CONTAINER_IMAGE}"
   if [ -n "${CODEX_LOCAL_VERSION}" ]; then
     echo "codex cli version: ${CODEX_LOCAL_VERSION}"
@@ -1974,6 +1998,44 @@ start_sidecars() {
   done
 }
 
+start_firewall_container() {
+  podman run --name "$FW_NAME" -d \
+    --pod "$POD_NAME" \
+    --user root \
+    --label "codex.workspace.path=${WORK_DIR}" \
+    --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
+    --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
+    --label "codex.workspace.hash=${WORKSPACE_HASH}" \
+    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
+    --label "codex.workspace.role=firewall" \
+    -e TZ="${HOST_TZ}" \
+    -e CODEX_FIREWALL_DNS_TIMEOUT="${CODEX_FIREWALL_DNS_TIMEOUT}" \
+    -e CODEX_FIREWALL_DNS_TRIES="${CODEX_FIREWALL_DNS_TRIES}" \
+    -e CODEX_FIREWALL_DNS_BATCH_SIZE="${CODEX_FIREWALL_DNS_BATCH_SIZE}" \
+    -e CODEX_FIREWALL_DNS_PARALLELISM="${CODEX_FIREWALL_DNS_PARALLELISM}" \
+    -e CODEX_FIREWALL_DNS_CACHE_TTL="${CODEX_FIREWALL_DNS_CACHE_TTL}" \
+    --cap-add=NET_ADMIN \
+    --security-opt=no-new-privileges \
+    "${FIREWALL_POLICY_VOLUME_ARGS_ARRAY[@]}" \
+    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
+    "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
+    "${FIREWALL_CONTAINER_IMAGE}" \
+    sleep infinity
+}
+
+disable_optional_firewall() {
+  local reason="$1"
+
+  echo "Warning: ${reason}; continuing with firewall disabled." >&2
+  podman rm --time=0 -f "$FW_NAME" >/dev/null 2>&1 || true
+  FIREWALL_AVAILABLE=0
+  if proxy_enabled; then
+    echo "Warning: disabling proxy relay because its pod-side bridge requires the firewall container." >&2
+    PROXY_ENABLE=0
+  fi
+  write_host_firewall_status disabled
+}
+
 start_new_pod() {
   ensure_workspace_record "${WORK_DIR}"
   cleanup_resources immediate
@@ -2002,42 +2064,43 @@ start_new_pod() {
     "${CODEX_POD_RUNTIME_LABEL_ARGS_ARRAY[@]}" \
     "${PODMAN_POD_CREATE_ARGS_ARRAY[@]}"
 
-  podman run --name "$FW_NAME" -d \
-    --pod "$POD_NAME" \
-    --user root \
-    --label "codex.workspace.path=${WORK_DIR}" \
-    --label "codex.workspace.alias=${WORKSPACE_ALIAS}" \
-    --label "codex.workspace.seq=${WORKSPACE_SEQ}" \
-    --label "codex.workspace.hash=${WORKSPACE_HASH}" \
-    --label "codex.container.profile=${CODEX_CONTAINER_PROFILE}" \
-    --label "codex.workspace.role=firewall" \
-    -e TZ="${HOST_TZ}" \
-    --cap-add=NET_ADMIN \
-    --security-opt=no-new-privileges \
-    "${FIREWALL_POLICY_VOLUME_ARGS_ARRAY[@]}" \
-    "${PROXY_VOLUME_ARGS_ARRAY[@]}" \
-    "${PODMAN_FIREWALL_RUN_ARGS_ARRAY[@]}" \
-    "${FIREWALL_CONTAINER_IMAGE}" \
-    sleep infinity
-
-  start_proxy_container
-
-  podman exec "$FW_NAME" firewall-init
-
-  if [ "${#ALLOWED_DOMAIN_ARRAY[@]}" -gt 0 ]; then
-    printf '%s\n' "${ALLOWED_DOMAIN_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-domain
+  if start_firewall_container; then
+    FIREWALL_AVAILABLE=1
+  elif [ "${CODEX_FIREWALL_MODE}" = "enforced" ]; then
+    echo "Error: firewall container did not start cleanly in ${FW_NAME}." >&2
+    return 1
+  else
+    disable_optional_firewall "firewall container did not start cleanly in ${FW_NAME}"
   fi
 
-  if [ "${#EXTRA_ALLOWED_IPV4_ARRAY[@]}" -gt 0 ]; then
-    printf '%s\n' "${EXTRA_ALLOWED_IPV4_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+  if [ "${FIREWALL_AVAILABLE}" = "1" ]; then
+    if [ "${CODEX_FIREWALL_MODE}" = "lifted" ]; then
+      if ! podman exec "$FW_NAME" firewall-init || ! podman exec "$FW_NAME" firewall-lift; then
+        disable_optional_firewall "could not place ${FW_NAME} in lifted mode"
+      fi
+    else
+      podman exec "$FW_NAME" firewall-init
+
+      if [ "${#ALLOWED_DOMAIN_ARRAY[@]}" -gt 0 ]; then
+        printf '%s\n' "${ALLOWED_DOMAIN_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-domain
+      fi
+
+      if [ "${#EXTRA_ALLOWED_IPV4_ARRAY[@]}" -gt 0 ]; then
+        printf '%s\n' "${EXTRA_ALLOWED_IPV4_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+      fi
+
+      if [ "${#EXTRA_ALLOWED_IPV6_ARRAY[@]}" -gt 0 ]; then
+        printf '%s\n' "${EXTRA_ALLOWED_IPV6_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+      fi
+
+      podman exec "$FW_NAME" firewall-reload
+    fi
   fi
 
-  if [ "${#EXTRA_ALLOWED_IPV6_ARRAY[@]}" -gt 0 ]; then
-    printf '%s\n' "${EXTRA_ALLOWED_IPV6_ARRAY[@]}" | podman exec -i "$FW_NAME" firewall-allow-address
+  if [ "${FIREWALL_AVAILABLE}" = "1" ]; then
+    start_proxy_container
+    start_proxy
   fi
-
-  podman exec "$FW_NAME" firewall-reload
-  start_proxy
   start_sidecars
 
   podman run --name "$CONTAINER_NAME" -d \
@@ -2130,6 +2193,9 @@ fi
 REQUESTED_WORK_DIR="$(realpath -m "$WORK_DIR")"
 WORK_DIR=$(resolve_workspace_root "$WORK_DIR")
 load_selected_workspace_env_if_needed
+if [ "${CLI_NO_FIREWALL}" = "1" ]; then
+  CODEX_FIREWALL_MODE=lifted
+fi
 validate_profile_name "${CODEX_CONTAINER_PROFILE}"
 refresh_workspace_runtime_names
 refresh_app_work_dir
@@ -2151,6 +2217,11 @@ fi
 
 if [[ "${PROXY_ENABLE}" != "0" && "${PROXY_ENABLE}" != "1" ]]; then
   echo "Error: PROXY_ENABLE must be 0 or 1." >&2
+  exit 1
+fi
+
+if [[ "${CODEX_FIREWALL_MODE}" != "enforced" && "${CODEX_FIREWALL_MODE}" != "lifted" ]]; then
+  echo "Error: CODEX_FIREWALL_MODE must be enforced or lifted." >&2
   exit 1
 fi
 

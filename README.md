@@ -86,6 +86,11 @@ The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps
 to Alpine `bind-tools`. `kdig` maps to `knot-utils`, and `drill` maps to the
 Alpine `drill` package.
+DNS lookups are issued in batches and retried up to five times with a 750 ms
+deadline per resolver invocation. Diagnostic output is discarded rather than
+being admitted to nftables address sets. Firewall enforcement is enabled by
+default; `--no-firewall` or `CODEX_FIREWALL_MODE=lifted` requests best-effort
+lifted startup and continues without the firewall container if it is broken.
 
 More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md).
 
@@ -108,6 +113,7 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
   - starts interactive shells in the mounted workspace via an image profile hook
   - builds the firewall allowlist from named domain categories, with explicitly omitted preset domains kept out by default
   - exposes the current firewall policy read-only inside the app container through `codex-firewall-policy`
+  - supports explicit lifted startup while retaining fail-closed enforced startup
   - loads launcher defaults from global, workspace, and explicit env files without overriding caller-provided environment
   - maps `CODEX_ENV_<NAME>` launcher/env-file variables into app-container `<NAME>` variables
   - re-execs long-lived or mutating invocations from a runtime snapshot so later edits to the launcher do not affect the active command
