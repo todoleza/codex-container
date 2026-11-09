@@ -47,7 +47,7 @@ either `--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`,
 The runtime build is generated from `Dockerfile.in`. Sorted
 selected `container-deps/dnf/*.dnf` components become separate DNF install layers, and
 `build-images.sh` enables builder layer caching explicitly. It also mounts a
-persistent DNF cache from `.build-cache/dnf-fedora-45` by default. The default
+persistent DNF cache from `.build-cache/dnf-fedora-<tag>` by default. The default
 builder is `buildah bud`; set `CONTAINER_CLI=podman` to use Podman as an
 override. Override the DNF cache location with
 `DNF_CACHE_DIR=/path/to/cache ./build-images.sh`. The mounted DNF cache reduces
@@ -56,6 +56,20 @@ the builder layer cache is what skips unchanged DNF install steps entirely.
 The build driver detects the build host's timezone and supplies it as the
 runtime image's `TZ` build argument. Detection uses an explicit host `TZ`, the
 `/etc/localtime` zoneinfo link, or `timedatectl`, with `UTC` as the fallback.
+
+The base defaults to `fedora:latest`; the selected tag also determines the
+default DNF cache name (`.build-cache/dnf-fedora-latest` for the default).
+Set `FEDORA_VERSION` to choose another Fedora image tag without editing source:
+
+```bash
+FEDORA_VERSION=45 ./build-images.sh --profile fdroid
+```
+
+Runtime builds use `--pull=always` to refresh the selected base from the
+registry while retaining layer caching for unchanged content. A changed base
+reruns DNF metadata refresh before package installation. The explicit
+`DNF_CACHE_DIR` override takes precedence over tag-based cache naming; existing
+release-specific caches are preserved.
 
 All profile Containerfiles contain the same internal `codex-common` stage with
 the default packages, SOPS, runtime files, and user setup. Profile-specific
@@ -557,7 +571,7 @@ so multiple profiles can run against the same checkout.
 
 The `fdroid` profile implements the development toolchain in `fdroid-repo.md`
 for inspecting, aligning, signing, and publishing existing APKs. It uses the
-same Fedora 45 common stage as the other profiles, with Python tooling, Java
+same selected Fedora common stage as the other profiles, with Python tooling, Java
 25, SQLite, SSH/rsync, compilation dependencies, and basic archive/editing tools.
 Google's SDK binaries in this profile require Linux x86_64.
 
@@ -591,7 +605,9 @@ are not fully locked. Update the pins in the catalog fragments when upgrading.
 `/opt/project-venv` is owned by the image user and takes precedence on `PATH`.
 It includes `pytest>=8`, `setuptools>=75`, and wheel; these baseline development
 dependencies resolve during the build. The common image explicitly creates
-`/tmp` and `/var/tmp` with mode `1777` and checks writability as the image user.
+`/tmp` and `/var/tmp` with mode `1777` after all dependency installers and
+copies, then creates a temporary file in each directory as the image user.
+The check prints the user identity and directory permissions on build output.
 After launching in the mounted project, install project dependencies and check
 the toolchain:
 

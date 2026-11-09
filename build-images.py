@@ -18,6 +18,13 @@ MEMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PROFILE_RE = MEMBER_RE
 DNF_INSTALL_OPTIONS = "--setopt=install_weak_deps=False --setopt=keepcache=True"
 
+def fedora_settings(environment: dict[str, str], root: Path = ROOT) -> tuple[str, Path]:
+    version = environment.get("FEDORA_VERSION", "latest")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
+        fail(f"invalid FEDORA_VERSION image tag: {version!r}")
+    cache = Path(environment.get("DNF_CACHE_DIR", root / f".build-cache/dnf-fedora-{version}")).resolve()
+    return version, cache
+
 class BuildError(RuntimeError): pass
 
 @dataclass(frozen=True)
@@ -240,13 +247,14 @@ def build(argv: list[str]) -> int:
     dns = os.environ.get("CODEX_FIREWALL_DNS_TOOL", "dig")
     if dns not in {"dig", "kdig", "drill"}: fail(f"unsupported CODEX_FIREWALL_DNS_TOOL={dns}")
     timezone = detect_host_timezone()
-    version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT); cache = Path(os.environ.get("DNF_CACHE_DIR", ROOT/".build-cache/dnf-fedora-45")).resolve()
+    fedora_version, cache = fedora_settings(os.environ)
+    version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT)
     (cache/"dnf").mkdir(parents=True, exist_ok=True); (cache/"libdnf5").mkdir(parents=True, exist_ok=True); base = [cli, "build" if cli == "podman" else "bud"]
     subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
       "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     for name in selected:
         file = generate(profiles[name], common=profiles[BASE_PROFILE]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
-        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
+        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--pull=always", "--build-arg", f"FEDORA_VERSION={fedora_version}", "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
           "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro"]

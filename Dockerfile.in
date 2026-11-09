@@ -1,4 +1,5 @@
-FROM fedora:45 AS codex-common
+ARG FEDORA_VERSION=latest
+FROM fedora:${FEDORA_VERSION} AS codex-common
 
 ARG TZ
 ENV TZ="${TZ}"
@@ -6,9 +7,7 @@ ENV TZ="${TZ}"
 ARG USERNAME=node
 ARG SOPS_VERSION=latest
 
-RUN install -d -m 1777 /tmp /var/tmp
-
-RUN dnf -y makecache
+RUN dnf -y --refresh makecache
 
 # COMMON_DEPENDENCY_DROPINS
 
@@ -51,9 +50,14 @@ ARG USERNAME=node
 
 # ANSIBLE_COLLECTION_DROPINS
 
+# Normalize permissions after every installer and COPY has finished.
+RUN install -d -m 1777 /tmp /var/tmp
+
 USER "${USERNAME}"
 
-RUN test -w /tmp && test -w /var/tmp
+RUN id \
+  && stat -c '%a %U:%G %n' /tmp /var/tmp \
+  && python3 -c 'import tempfile; [tempfile.TemporaryFile(dir=path).close() for path in ("/tmp", "/var/tmp")]'
 
 ARG CODEX_PACKAGE_VERSION
 

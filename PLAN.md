@@ -74,14 +74,19 @@ same symlink-selected catalog system to non-RPM toolchains. The optional
 a separate writable `/opt/project-venv`; no Morphe-specific application code or
 dependencies are installed. That environment is primed with `pytest>=8`,
 `setuptools>=75`, and wheel. The common image explicitly sets mode `1777` on
-`/tmp` and `/var/tmp` and checks writability after switching to the image user.
+`/tmp` and `/var/tmp` after all dependency installers/copies, then verifies
+temporary-file creation after switching to the image user.
 Google SDK binaries require x86_64, and SDK license
 acceptance follows the fragment's `ARG ANDROID_ACCEPT_LICENSES` default, with
 an explicitly set `ANDROID_ACCEPT_LICENSES` build environment variable taking
 precedence. The user's chosen fragment default is now `1`.
-All runtime profiles use Fedora 45 with a separate `.build-cache/dnf-fedora-45`
-cache by default. The F-Droid profile uses `java-25-openjdk-devel`, available in
-Fedora 45. SDK platforms, emulators, and manifest editors remain
+All runtime profiles default to `fedora:latest`, configurable with the
+`FEDORA_VERSION` build environment variable. Runtime builds use `--pull=always`
+to refresh the selected base and derive the default DNF cache name from the
+tag (`.build-cache/dnf-fedora-<tag>`), with `DNF_CACHE_DIR` retaining precedence.
+DNF refreshes metadata when the changed base invalidates its build layer.
+The F-Droid profile currently uses `java-25-openjdk-devel`.
+SDK platforms, emulators, and manifest editors remain
 outside this repository-publishing profile.
 
 ### Pod layout

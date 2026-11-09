@@ -28,9 +28,12 @@ The image build defaults to `buildah bud`; set `CONTAINER_CLI=podman` to use
 Podman as an override. The runtime image is generated from `Dockerfile.in`;
 `build-images.sh` is a compatibility entrypoint for the Python build driver.
 It validates profile symlinks and expands the selected `container-deps/dnf/*.dnf`
-components into separate DNF install layers. Runtime builds
-also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-45` by default;
-set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. Generated DNF
+components into separate DNF install layers. Runtime builds use `fedora:latest`
+by default; set `FEDORA_VERSION=45` (or another Fedora image tag) to pin the
+base. Each runtime build checks the registry with `--pull=always`.
+All profiles reuse a repo-local DNF cache at `.build-cache/dnf-fedora-<tag>`;
+the default is `.build-cache/dnf-fedora-latest`. Set `DNF_CACHE_DIR=/path/to/cache`
+to share or relocate it. Generated DNF
 install commands enable `keepcache`, so RPM payloads remain in this cache for
 other profiles and later cold layers. The explicit builder layer cache is what
 keeps unchanged `RUN dnf ...` steps from executing again.
@@ -70,7 +73,7 @@ previously used image has been removed.
 
 Generated evidence is retained under
 `.build-cache/profiles/<profile>/Containerfile`, with supporting collection
-requirements beside it. All profiles share `.build-cache/dnf-fedora-45` and the
+requirements beside it. All profiles for the selected Fedora tag share its DNF cache and the
 builder's local layer store. `container-deps/copr/` accepts declarative `.copr`
 files (`OWNER/PROJECT [CHROOT]`), while `container-deps/repos/` accepts literal
 `.repo` files. Literal repositories do not automatically add their domains to
@@ -85,7 +88,7 @@ published profile image inherit another.
 The optional `fdroid` profile supplies the toolchain described in
 `fdroid-repo.md`: Java 25, Android CLI tools, Build Tools 36.0.0 (`apksigner`,
 `zipalign`, `aapt2`), Platform Tools (`adb`), and fdroidserver 2.4.5 in its own
-virtualenv. It keeps the Fedora 45 base and requires Linux x86_64. After
+virtualenv. It uses the selected Fedora base and requires Linux x86_64. After
 reviewing the [Android SDK license](https://developer.android.com/studio#terms),
 build and launch it with:
 

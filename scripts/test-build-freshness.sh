@@ -15,7 +15,7 @@ case "$1" in inspect) exit 1 ;; esac
 EOF
 chmod 755 "${tmpdir}/bin/curl" "${tmpdir}/bin/buildah"
 export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache" TZ="Europe/Prague"
-(cd "${repo_root}" && env -u ANDROID_ACCEPT_LICENSES ./build-images.sh --batch)
+(cd "${repo_root}" && env -u ANDROID_ACCEPT_LICENSES -u FEDORA_VERSION ./build-images.sh --batch)
 if grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=' "${BUILDAH_LOG}"; then
   echo 'unset license environment must preserve the Containerfile ARG default' >&2
   exit 1
@@ -26,15 +26,18 @@ grep -Fq 'tag codex:default codex:latest' "${BUILDAH_LOG}"
 grep -Fq 'bud --layers -t codex-firewall' "${BUILDAH_LOG}"
 grep -Fq -- '--label codex.container.profile=default' "${BUILDAH_LOG}"
 grep -Fq -- '--build-arg TZ=Europe/Prague' "${BUILDAH_LOG}"
+grep -Fq -- '--pull=always --build-arg FEDORA_VERSION=latest' "${BUILDAH_LOG}"
 firewall_line="$(grep -n -m1 'bud --layers -t codex-firewall' "${BUILDAH_LOG}" | cut -d: -f1)"
 runtime_line="$(grep -n -m1 -- '--target codex-profile' "${BUILDAH_LOG}" | cut -d: -f1)"
 test "${firewall_line}" -lt "${runtime_line}"
 grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Containerfile"
 : > "${BUILDAH_LOG}"
-(cd "${repo_root}" && ANDROID_ACCEPT_LICENSES=1 ./build-images.sh --all-profiles --batch)
+(cd "${repo_root}" && FEDORA_VERSION=99 ANDROID_ACCEPT_LICENSES=1 ./build-images.sh --all-profiles --batch)
 grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=1' "${BUILDAH_LOG}"
 mapfile -t build_profiles < <(find "${repo_root}/container-profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
+test "$(grep -c -- '--pull=always --build-arg FEDORA_VERSION=99' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
+grep -Fq -- "${DNF_CACHE_DIR}/dnf:/var/cache/dnf:Z,rw" "${BUILDAH_LOG}"
 for profile in "${build_profiles[@]}"; do
   grep -Eq "bud --layers --target codex-profile -t codex:candidate-${profile}-" "${BUILDAH_LOG}"
 done

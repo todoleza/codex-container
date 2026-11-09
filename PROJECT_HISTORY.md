@@ -1,5 +1,34 @@
 # Project History
 
+## 2026-11-09 - Generalize Fedora selection and finalize temporary-directory permissions
+
+### Changed and evidence
+- Replaced release-specific base/cache settings with `FEDORA_VERSION`,
+  defaulting to `latest`. The driver passes the selected tag to the template's
+  `FROM fedora:${FEDORA_VERSION}` and derives `.build-cache/dnf-fedora-<tag>`
+  unless `DNF_CACHE_DIR` is explicitly set. No release number remains in the
+  build driver.
+- Runtime builds use `--pull=always`, matching Buildah's documented pull policy,
+  so the rolling default checks for a fresh base. DNF refreshes metadata when
+  the base changes and its dependency layer runs again. Retained the common
+  stage, profile composition, layer caching, and existing cache directories.
+- The user reported the root F-Droid verifier passed but the subsequent
+  `USER`-scoped `/tmp`/`/var/tmp` check failed. Moved permission normalization to
+  after all dependency installers and copies. The image-user check now prints
+  identity/modes and actually creates temporary files in both directories.
+  The exact earlier operation affecting directory access remains unconfirmed.
+
+### Validation and follow-up
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-build-profiles.py`: 13 tests
+  passed, including default/pinned tag selection, cache override, and unsafe
+  tag rejection.
+- `PYTHONDONTWRITEBYTECODE=1 bash scripts/test-build-freshness.sh`: mocked
+  builds passed for default `latest`, an arbitrary future release tag, all
+  profiles, the cache override, and license overrides.
+- Shell syntax, generated Containerfile inspection, and `git diff --check`
+  passed. Real base pulls and the final non-root temporary-file check still
+  require the host image builder; Buildah/Podman are unavailable here.
+
 ## 2026-11-09 - Prime project test tooling and ensure writable temporary directories
 
 ### Changed and evidence

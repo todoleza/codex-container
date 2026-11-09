@@ -31,7 +31,7 @@ class ProfilesTest(unittest.TestCase):
         common_stages = []
         for profile in profiles.values():
             text, _ = m.render(profile, template, common=profiles["default"])
-            common_stages.append(text[text.index("FROM fedora:45 AS codex-common"):text.index("FROM codex-common AS codex-profile")])
+            common_stages.append(text[text.index("ARG FEDORA_VERSION="):text.index("FROM codex-common AS codex-profile")])
             final = text[text.index("FROM codex-common AS codex-profile"):]
             self.assertNotIn("CODEX_PACKAGE_VERSION", common_stages[-1])
             self.assertIn("CODEX_PACKAGE_VERSION", final)
@@ -112,6 +112,19 @@ class ProfilesTest(unittest.TestCase):
             localtime = Path(td)/"localtime"
             localtime.symlink_to("../usr/share/zoneinfo/America/New_York")
             self.assertEqual(m.detect_host_timezone({}, localtime), "America/New_York")
+
+    def test_fedora_version_and_cache_selection(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertEqual(m.fedora_settings({}, root),
+                             ("latest", root/".build-cache/dnf-fedora-latest"))
+            self.assertEqual(m.fedora_settings({"FEDORA_VERSION": "99"}, root),
+                             ("99", root/".build-cache/dnf-fedora-99"))
+            self.assertEqual(m.fedora_settings({"FEDORA_VERSION": "rawhide", "DNF_CACHE_DIR": str(root/"custom")}, root),
+                             ("rawhide", root/"custom"))
+            for invalid in ("", "../45", "45/../../tmp", "45\nRUN false", "fedora:45"):
+                with self.subTest(version=invalid), self.assertRaises(m.BuildError):
+                    m.fedora_settings({"FEDORA_VERSION": invalid}, root)
     def fixture(self):
         temp = tempfile.TemporaryDirectory(); root = Path(temp.name)
         for d in ("container-deps/dnf","container-deps/copr","container-deps/repos","container-deps/collections","container-profiles/default/dnf"): (root/d).mkdir(parents=True, exist_ok=True)
