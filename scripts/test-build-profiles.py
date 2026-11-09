@@ -9,7 +9,7 @@ class ProfilesTest(unittest.TestCase):
     def test_catalog_layout(self):
         self.assertEqual({catalog for catalog, _ in m.KINDS.values()}, {
             "container-deps/dnf", "container-deps/copr",
-            "container-deps/repos", "container-deps/collections",
+            "container-deps/repos", "container-deps/collections", "container-deps/containerfiles",
         })
         self.assertFalse((ROOT/"container-repos").exists())
         self.assertFalse((ROOT/"container-collections").exists())
@@ -31,7 +31,7 @@ class ProfilesTest(unittest.TestCase):
         common_stages = []
         for profile in profiles.values():
             text, _ = m.render(profile, template, common=profiles["default"])
-            common_stages.append(text[text.index("FROM fedora:44 AS codex-common"):text.index("FROM codex-common AS codex-profile")])
+            common_stages.append(text[text.index("FROM fedora:45 AS codex-common"):text.index("FROM codex-common AS codex-profile")])
             final = text[text.index("FROM codex-common AS codex-profile"):]
             self.assertNotIn("CODEX_PACKAGE_VERSION", common_stages[-1])
             self.assertIn("CODEX_PACKAGE_VERSION", final)
@@ -50,6 +50,46 @@ class ProfilesTest(unittest.TestCase):
         profiles["media"] = m.Profile("media", media_members)
         with self.assertRaises(m.BuildError):
             m.validate_profile_relationships(profiles)
+
+    def test_fdroid_is_optional_and_uses_shared_fragments(self):
+        template = (ROOT/"Dockerfile.in").read_text()
+        fdroid = m.read_profile("fdroid")
+        text, _ = m.render(fdroid, template)
+        final = text[text.index("FROM codex-common AS codex-profile"):]
+        self.assertLess(final.index("80-fdroid.dnf"), final.index("ARG ANDROID_CMDLINE_TOOLS="))
+        self.assertLess(final.index("ARG ANDROID_CMDLINE_TOOLS="), final.index("ARG FDROIDSERVER_VERSION="))
+        self.assertLess(final.index("ARG FDROIDSERVER_VERSION="), final.index('USER "${USERNAME}"'))
+        self.assertIn('test "${ANDROID_ACCEPT_LICENSES}" = 1', final)
+        self.assertIn('sha256sum -c -', final)
+        self.assertIn('"fdroidserver==${FDROIDSERVER_VERSION}"', final)
+        self.assertIn('/opt/project-venv/bin:${PATH}:/opt/fdroid-venv/bin', final)
+        for name in ("default", "full", "python"):
+            other, _ = m.render(m.read_profile(name), template)
+            self.assertNotIn("/opt/android-sdk", other)
+            self.assertNotIn("/opt/fdroid-venv", other)
+
+    def test_fragment_catalog_guards_and_shared_membership(self):
+        temp, root = self.fixture()
+        with temp:
+            catalog = root/"container-deps/containerfiles"
+            catalog.mkdir()
+            (catalog/"sdk.containerfile").write_text("ENV SDK_HOME=/opt/sdk\n")
+            directory = root/"container-profiles/default/containerfiles"
+            directory.mkdir()
+            member = directory/"sdk.containerfile"
+            member.symlink_to("../../../container-deps/containerfiles/sdk.containerfile")
+            common = m.read_profile("default", root)
+            template = (ROOT/"Dockerfile.in").read_text()
+            text, _ = m.render(common, template, root, common)
+            self.assertEqual(text.count("ENV SDK_HOME=/opt/sdk"), 1)
+            self.assertLess(text.index("ENV SDK_HOME=/opt/sdk"), text.index("FROM codex-common"))
+            child = m.Profile("child", {**common.members, "containerfiles": ()})
+            with self.assertRaises(m.BuildError):
+                m.validate_profile_relationships({"default": common, "child": child})
+            member.unlink()
+            member.symlink_to("../../../Dockerfile.in")
+            with self.assertRaises(m.BuildError):
+                m.read_profile("default", root)
     def test_selectors(self):
         profiles = ("default", "full", "infra", "media", "python", "typesetting")
         self.assertEqual(m.selection([], profiles)[1], ("default",))

@@ -1,5 +1,118 @@
 # Project History
 
+## 2026-11-09 - Prime project test tooling and ensure writable temporary directories
+
+### Changed and evidence
+- The user verified the running F-Droid toolchain (Python 3.15, Java 25,
+  Android Build Tools 36.0.0, fdroidserver 2.4.5), including zipalign, using
+  `TMPDIR=/var/tmp`; `/tmp` was reported unwritable. This confirms the toolchain
+  is installed, while the earlier missing-tools report did not reflect it.
+- Added `pytest>=8`, `setuptools>=75`, and wheel to `/opt/project-venv`.
+  The mounted application still needs its own editable installation.
+- Explicitly create `/tmp` and `/var/tmp` with mode `1777` in the common image
+  and check writability as the image user. The precise cause of the reported
+  runtime `/tmp` permissions was not established from the supplied output.
+- Extended `codex-verify-fdroid-env` to check project dependencies and both
+  temporary directories, so overriding TMPDIR cannot hide a broken `/tmp`.
+
+### Validation and follow-up
+- Profile-generation tests, mocked builds, shell syntax, ShellCheck, and
+  `git diff --check` passed. A temporary Python 3.14 environment verified the
+  baseline package installation and version checks.
+- Rebuild and verify as the runtime user on the host; no local Buildah/Podman
+  is available here. The existing container is not changed by these edits.
+
+## 2026-11-09 - Preserve the selected Android license ARG default
+
+### Changed and evidence
+- The user explicitly changed `ARG ANDROID_ACCEPT_LICENSES=1` in the Android
+  catalog fragment, but the builder still supplied `--build-arg
+  ANDROID_ACCEPT_LICENSES=0` whenever the environment variable was absent.
+- The driver now forwards a license build argument only when the build
+  environment explicitly sets it, preserving the user's fragment default.
+  Explicit environment values, including `0`, still override the fragment.
+
+### Validation
+- Mocked build tests cover an unset environment, explicit `1`, and explicit
+  `0`; profile-generation tests and `git diff --check` passed.
+- The fragment's user-selected default remains `1`. Full image/SDK execution
+  still requires Buildah or Podman outside this session.
+
+## 2026-11-09 - Upgrade runtime profiles to Fedora 45
+
+### Changed and evidence
+- Updated `Dockerfile.in` to `fedora:45` for every runtime profile, following
+  the user's direction to use the released Fedora 45 base.
+- Changed the default DNF cache to `.build-cache/dnf-fedora-45`, preserving the
+  old Fedora 44 cache and the explicit `DNF_CACHE_DIR` override.
+- Updated current usage/design notes and the common-stage generation check.
+  Fedora's [package metadata](https://packages.fedoraproject.org/pkgs/java-25-openjdk/java-25-openjdk-devel/fedora-45.html)
+  confirms `java-25-openjdk-devel` is available for Fedora 45.
+
+### Validation and follow-up
+- Profile-generation tests and mocked build orchestration passed. Generated
+  Containerfiles use Fedora 45 and the F-Droid profile selects OpenJDK 25.
+- `git diff --check` passed. Real Fedora 45 RPM transaction resolution and SDK
+  execution still require a build on a host with Buildah/Podman.
+
+## 2026-11-09 - Fix the F-Droid Java package for Fedora 44
+
+### Changed and evidence
+- Replaced `java-21-openjdk-devel` with `java-25-openjdk-devel` in
+  `container-deps/dnf/80-fdroid.dnf` and aligned current usage/design notes.
+- The reported Buildah transaction failed with `No match for argument:
+  java-21-openjdk-devel`. Fedora retired OpenJDK 21 from Fedora 44; the
+  [Fedora 44 package metadata](https://packages.fedoraproject.org/pkgs/java-25-openjdk/java-25-openjdk-devel/fedora-44.html)
+  confirms the replacement package is available.
+
+### Validation and follow-up
+- Profile-generation tests and mocked build orchestration passed; inspected
+  the generated F-Droid Containerfile for the replacement package.
+- `git diff --check` passed. A real Fedora image build and SDK execution still
+  require a host with Buildah/Podman. The reported command also supplied
+  `ANDROID_ACCEPT_LICENSES=0`; SDK installation requires explicit opt-in as
+  documented in the build instructions.
+
+## 2026-11-09 - Add an optional F-Droid repository toolchain
+
+### Changed
+- Added the directory-discovered `fdroid` profile with default/Python components,
+  Java 21, APK tooling, SQLite, archive utilities, and development packages.
+- Extended the existing symlink catalog mechanism with trusted `.containerfile`
+  fragments for reusable non-RPM installations, after DNF and before collections.
+- Pinned the checksum-verified Android CLI to `15859902`, Build Tools to
+  `36.0.0`, and fdroidserver to `2.4.5` in its own virtualenv. Project installs
+  use a separate writable `/opt/project-venv`; Google's sdkmanager precedes the
+  same-named Python dependency on `PATH`.
+- Added `codex-verify-fdroid-env` as a build/runtime smoke check and documented
+  build, launch, license opt-in, network sources, and dependency-locking limits.
+
+### Why and evidence
+- `fdroid-repo.md` requests a toolchain for existing APKs, with isolated Python
+  environments and deferred manifest editor selection. Preserved Fedora 44 and
+  the common-stage architecture in `Dockerfile.in` and `PLAN.md`; no SDK
+  platforms, emulator, application code, signing keys, or repo are created.
+- Confirmed the CLI checksum against Google's Android Studio download page and
+  the fdroidserver release/dependencies against PyPI. SDK license acceptance
+  requires an explicit `ANDROID_ACCEPT_LICENSES=1` build environment setting.
+
+### Validation
+- `python3 scripts/test-build-profiles.py`: 12 tests passed, including shared
+  stage identity, optional toolchain isolation, and fragment symlink boundaries.
+- `bash scripts/test-build-freshness.sh`: mocked builds passed, including
+  all-profile discovery and license build-argument propagation.
+- `bash scripts/test-launcher-profiles.sh`: passed.
+- An isolated Python 3.14 virtualenv installed `fdroidserver==2.4.5` and passed
+  `pip check`, `fdroid --version`, and `fdroid update --help`.
+- Shell syntax, ShellCheck, generated Containerfile inspection, and
+  `git diff --check` passed.
+
+### Follow-up
+- Build and run `codex:fdroid` on a Linux x86_64 host with Buildah or Podman;
+  neither image builder is installed in this session. SDK binary execution and
+  Fedora RPM resolution were not validated here. Platform Tools and transitive
+  pip packages still resolve at build time.
+
 ## 2026-10-07 - Harden DNS batches and support lifted startup
 
 ### Changed

@@ -29,7 +29,7 @@ Podman as an override. The runtime image is generated from `Dockerfile.in`;
 `build-images.sh` is a compatibility entrypoint for the Python build driver.
 It validates profile symlinks and expands the selected `container-deps/dnf/*.dnf`
 components into separate DNF install layers. Runtime builds
-also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-44` by default;
+also reuse a repo-local DNF cache at `.build-cache/dnf-fedora-45` by default;
 set `DNF_CACHE_DIR=/path/to/cache` to share or relocate it. Generated DNF
 install commands enable `keepcache`, so RPM payloads remain in this cache for
 other profiles and later cold layers. The explicit builder layer cache is what
@@ -70,7 +70,7 @@ previously used image has been removed.
 
 Generated evidence is retained under
 `.build-cache/profiles/<profile>/Containerfile`, with supporting collection
-requirements beside it. All profiles share `.build-cache/dnf-fedora-44` and the
+requirements beside it. All profiles share `.build-cache/dnf-fedora-45` and the
 builder's local layer store. `container-deps/copr/` accepts declarative `.copr`
 files (`OWNER/PROJECT [CHROOT]`), while `container-deps/repos/` accepts literal
 `.repo` files. Literal repositories do not automatically add their domains to
@@ -78,9 +78,31 @@ the firewall allowlist.
 
 DNF component prefixes encode the cache-oriented order: common agent and
 secrets components (`10`-`30`), infrastructure (`40`-`42`), Python (`50`),
-media (`60`), and disabled components (`90`). This lets `media` reuse the
+media (`60`), F-Droid (`80`), and disabled components (`90`). This lets `media` reuse the
 Python prefix and `full` reuse the infrastructure prefix without making one
 published profile image inherit another.
+
+The optional `fdroid` profile supplies the toolchain described in
+`fdroid-repo.md`: Java 25, Android CLI tools, Build Tools 36.0.0 (`apksigner`,
+`zipalign`, `aapt2`), Platform Tools (`adb`), and fdroidserver 2.4.5 in its own
+virtualenv. It keeps the Fedora 45 base and requires Linux x86_64. After
+reviewing the [Android SDK license](https://developer.android.com/studio#terms),
+build and launch it with:
+
+```bash
+ANDROID_ACCEPT_LICENSES=1 ./build-images.sh --profile fdroid
+./run-in-container.sh --profile fdroid --wd /path/to/project
+```
+
+The project gets a separate writable `/opt/project-venv` on `PATH`, primed with
+`pytest>=8`, `setuptools>=75`, and wheel. Install the mounted project inside the
+running container with `python -m pip install -e '.[test]'`.
+Run `codex-verify-fdroid-env` in the container to check the tools. SDK
+platforms, Android Studio, emulators, and manifest editors are deferred.
+See [the profile usage notes](howto-use-with-podman.md#f-droid-repository-toolchain)
+for network requirements and dependency pinning limits. `--all-profiles` also
+selects this profile and requires SDK license acceptance; use
+`--no-profile fdroid` to exclude it.
 
 The firewall image installs one DNS resolver selected before image creation
 with `CODEX_FIREWALL_DNS_TOOL=dig|kdig|drill`; the default is `dig`, which maps
@@ -132,9 +154,9 @@ More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md
 - `Dockerfile.in`
   - Fedora Codex runtime image template
 - `container-profiles/`
-  - relative-symlink membership for DNF, COPR, repository, and collection catalogs
+  - relative-symlink membership for DNF, COPR, repository, collection, and Containerfile catalogs
 - `container-deps/`
-  - shared `dnf`, `copr`, `repos`, and `collections` catalogs selected by profiles
+  - shared `dnf`, `copr`, `repos`, `collections`, and `containerfiles` catalogs selected by profiles
 - `container-runtime/`
   - image-side Codex wrapper and shell profile hook
 - `Dockerfile.firewall`

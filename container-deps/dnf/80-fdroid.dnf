@@ -1,0 +1,18 @@
+# Tools for publishing and inspecting already-built APKs.
+openssh-clients
+wget
+zip
+tar
+gzip
+xz
+findutils
+sqlite
+python3-devel
+gcc
+gcc-c++
+make
+libffi-devel
+openssl-devel
+java-25-openjdk-devel
+patch
+vim-minimal

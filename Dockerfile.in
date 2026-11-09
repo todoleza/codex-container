@@ -1,10 +1,12 @@
-FROM fedora:44 AS codex-common
+FROM fedora:45 AS codex-common
 
 ARG TZ
 ENV TZ="${TZ}"
 
 ARG USERNAME=node
 ARG SOPS_VERSION=latest
+
+RUN install -d -m 1777 /tmp /var/tmp
 
 RUN dnf -y makecache
 
@@ -50,6 +52,8 @@ ARG USERNAME=node
 # ANSIBLE_COLLECTION_DROPINS
 
 USER "${USERNAME}"
+
+RUN test -w /tmp && test -w /var/tmp
 
 ARG CODEX_PACKAGE_VERSION
 

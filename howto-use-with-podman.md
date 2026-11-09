@@ -47,7 +47,7 @@ either `--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`,
 The runtime build is generated from `Dockerfile.in`. Sorted
 selected `container-deps/dnf/*.dnf` components become separate DNF install layers, and
 `build-images.sh` enables builder layer caching explicitly. It also mounts a
-persistent DNF cache from `.build-cache/dnf-fedora-44` by default. The default
+persistent DNF cache from `.build-cache/dnf-fedora-45` by default. The default
 builder is `buildah bud`; set `CONTAINER_CLI=podman` to use Podman as an
 override. Override the DNF cache location with
 `DNF_CACHE_DIR=/path/to/cache ./build-images.sh`. The mounted DNF cache reduces
@@ -552,3 +552,66 @@ after that build succeeds.
 Rollback manually with `podman tag codex:prev-<profile> codex:<profile>` after
 inspecting the retained tags. Profile selection is part of workspace identity,
 so multiple profiles can run against the same checkout.
+
+## F-Droid repository toolchain
+
+The `fdroid` profile implements the development toolchain in `fdroid-repo.md`
+for inspecting, aligning, signing, and publishing existing APKs. It uses the
+same Fedora 45 common stage as the other profiles, with Python tooling, Java
+25, SQLite, SSH/rsync, compilation dependencies, and basic archive/editing tools.
+Google's SDK binaries in this profile require Linux x86_64.
+
+Review the [Android SDK license](https://developer.android.com/studio#terms),
+then explicitly accept it for the build:
+
+```bash
+./codex-artifact.sh prepare
+ANDROID_ACCEPT_LICENSES=1 ./build-images.sh --profile fdroid
+./run-in-container.sh --profile fdroid --wd /path/to/project
+```
+
+`--all-profiles` includes `fdroid` and needs the same acceptance. To build all
+other profiles, use `./build-images.sh --all-profiles --no-profile fdroid`.
+
+The build driver forwards `ANDROID_ACCEPT_LICENSES` only when it is set in the
+build environment. Otherwise it preserves the fragment's `ARG` default
+(currently `1`, as explicitly selected by the user). An exported value,
+including `0`, overrides that default. Editing the catalog fragment persists
+across generation; editing `.build-cache/profiles/fdroid/Containerfile` does not.
+
+Shared instructions under `container-deps/containerfiles/` pin the Android CLI
+archive to `15859902` with its SHA-256 and Build Tools to `36.0.0`, installing
+under `/opt/android-sdk`. `ANDROID_HOME` and `ANDROID_SDK_ROOT` point there;
+`apksigner`, `zipalign`, `aapt2`, `adb`, and Google's `sdkmanager` are on `PATH`.
+The separate `/opt/fdroid-venv` pins `fdroidserver==2.4.5`, following
+[F-Droid's virtualenv guidance for Fedora](https://f-droid.org/docs/Installing_the_Server_and_Repo_Tools/).
+Platform Tools and pip transitive dependencies resolve during the build and
+are not fully locked. Update the pins in the catalog fragments when upgrading.
+
+`/opt/project-venv` is owned by the image user and takes precedence on `PATH`.
+It includes `pytest>=8`, `setuptools>=75`, and wheel; these baseline development
+dependencies resolve during the build. The common image explicitly creates
+`/tmp` and `/var/tmp` with mode `1777` and checks writability as the image user.
+After launching in the mounted project, install project dependencies and check
+the toolchain:
+
+```bash
+python -m pip install -e '.[test]'
+codex-verify-fdroid-env
+```
+
+The verifier also runs during the image build. The project virtualenv lives
+in the ephemeral app container; reinstall project dependencies after container
+replacement. F-Droid's own virtualenv stays separate from project installs.
+The verifier checks both Python environments, the minimum pytest/setuptools versions,
+temporary-directory access, and zipalign on a disposable archive. If an older
+container needs `TMPDIR=/var/tmp`, check its `/tmp` permissions; rebuilding an
+image does not update a container that is already running.
+SDK platforms, Android Studio, emulators, application packages, signing keys,
+repository initialization, and manifest editors are not installed or generated.
+
+Image builds need access to `dl.google.com` for SDK downloads and PyPI plus
+`files.pythonhosted.org` for Python packages, in addition to the existing Fedora
+and Codex build sources. Image build networking is managed by the host builder.
+The runtime firewall allowlist is unchanged; runtime SDK downloads or access to
+F-Droid hosts need explicit operator allowlist configuration as described above.

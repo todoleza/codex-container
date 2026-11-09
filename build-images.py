@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parent
 BASE_PROFILE = "default"
 PROFILE_RELATIONSHIPS = (("python", "media"), ("python", "full"), ("media", "full"), ("infra", "full"))
 KINDS = {"dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr", {".copr"}),
-         "repos": ("container-deps/repos", {".repo"}), "collections": ("container-deps/collections", {".yml", ".yaml"})}
+         "repos": ("container-deps/repos", {".repo"}), "collections": ("container-deps/collections", {".yml", ".yaml"}),
+         "containerfiles": ("container-deps/containerfiles", {".containerfile"})}
 COPR_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.:+-]+)?$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:*?-]*$")
 MEMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -115,6 +116,9 @@ def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[s
         rel = source.relative_to(root)
         steps += [f"# {rel}", f"RUN printf 'Installing DNF component: {rel}\\n' \\", f"  && dnf -y install {DNF_INSTALL_OPTIONS} \\"]
         steps += [f"    {package} \\" for package in parse_dnf(source)] + ["  && true", ""]
+    for source in members["containerfiles"]:
+        rel = source.relative_to(root)
+        steps += [f"# {rel}", source.read_text().rstrip(), ""]
     return steps
 
 def render(profile: Profile, template: str, root: Path = ROOT, common: Profile | None = None) -> tuple[str, str | None]:
@@ -236,7 +240,7 @@ def build(argv: list[str]) -> int:
     dns = os.environ.get("CODEX_FIREWALL_DNS_TOOL", "dig")
     if dns not in {"dig", "kdig", "drill"}: fail(f"unsupported CODEX_FIREWALL_DNS_TOOL={dns}")
     timezone = detect_host_timezone()
-    version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT); cache = Path(os.environ.get("DNF_CACHE_DIR", ROOT/".build-cache/dnf-fedora-44")).resolve()
+    version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT); cache = Path(os.environ.get("DNF_CACHE_DIR", ROOT/".build-cache/dnf-fedora-45")).resolve()
     (cache/"dnf").mkdir(parents=True, exist_ok=True); (cache/"libdnf5").mkdir(parents=True, exist_ok=True); base = [cli, "build" if cli == "podman" else "bud"]
     subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
       "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
@@ -245,7 +249,10 @@ def build(argv: list[str]) -> int:
         cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
-          "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro", "."]
+          "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro"]
+        if "ANDROID_ACCEPT_LICENSES" in os.environ:
+            cmd += ["--build-arg", f"ANDROID_ACCEPT_LICENSES={os.environ['ANDROID_ACCEPT_LICENSES']}"]
+        cmd.append(".")
         subprocess.run(cmd, cwd=ROOT, check=True); promote(cli, candidate, name)
     return 0
 if __name__ == "__main__":

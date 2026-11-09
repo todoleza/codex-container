@@ -7,7 +7,7 @@ Run Codex in an unprivileged container while enforcing outbound network policy f
 ### Images
 
 - `Dockerfile.in`: template for the generated Fedora-based Codex runtime image
-- `container-deps/`: shared `dnf`, `copr`, `repos`, and `collections` catalogs
+- `container-deps/`: shared `dnf`, `copr`, `repos`, `collections`, and `containerfiles` catalogs
 - `Dockerfile.firewall`: minimal Alpine firewall image
 - `build-images.sh`: top-level Buildah-first image builder consuming `dist/codex.tgz`
 - `build-images.py`: profile validation, retained Containerfile generation,
@@ -23,8 +23,8 @@ through one container-owned daemon process and shared control socket.
 ### Dependency profiles
 
 Runtime dependencies are selected through relative symlinks under
-`container-profiles/<name>/{dnf,copr,repos,collections}`. The matching shared
-catalogs live under `container-deps/{dnf,copr,repos,collections}`.
+`container-profiles/<name>/{dnf,copr,repos,collections,containerfiles}`. The matching shared
+catalogs live under `container-deps/{dnf,copr,repos,collections,containerfiles}`.
 The build driver discovers profile names from those directories, requires
 `default` as the base membership of every other profile, and does not require a
 source edit when a profile is added. SCAD remains unselected. Generated
@@ -43,8 +43,8 @@ frequently changing Codex artifact last. The internal stage is not published
 and no profile depends on an existing `codex:default` tag.
 
 Repository setup is ordered before package layers: literal `.repo` files,
-conditional Fedora COPR support and enablement, DNF components, then Ansible
-collections. Builds use candidate tags so a successful promotion retains one
+conditional Fedora COPR support and enablement, DNF components, Containerfile
+fragments, then Ansible collections. Builds use candidate tags so a successful promotion retains one
 `codex:prev-<profile>` rollback image. The launcher includes the selected
 profile in workspace identity, allowing profiles for one checkout to coexist.
 The launcher discovers launchable profiles from matching local
@@ -65,6 +65,24 @@ DNF components use a canonical cache order: common (`10`-`30`), infrastructure
 shares Python's dependency prefix, while `full` shares infrastructure's DNF
 prefix before adding Python and media dependencies. These are cache prefixes,
 not public image inheritance relationships.
+
+Trusted `.containerfile` fragments are inserted after the DNF components in
+their common or profile stage, before Ansible collections. This extends the
+same symlink-selected catalog system to non-RPM toolchains. The optional
+`fdroid` profile uses it for the checksum-pinned Android CLI, Build Tools
+36.0.0, and fdroidserver 2.4.5 in `/opt/fdroid-venv`. Project dependencies use
+a separate writable `/opt/project-venv`; no Morphe-specific application code or
+dependencies are installed. That environment is primed with `pytest>=8`,
+`setuptools>=75`, and wheel. The common image explicitly sets mode `1777` on
+`/tmp` and `/var/tmp` and checks writability after switching to the image user.
+Google SDK binaries require x86_64, and SDK license
+acceptance follows the fragment's `ARG ANDROID_ACCEPT_LICENSES` default, with
+an explicitly set `ANDROID_ACCEPT_LICENSES` build environment variable taking
+precedence. The user's chosen fragment default is now `1`.
+All runtime profiles use Fedora 45 with a separate `.build-cache/dnf-fedora-45`
+cache by default. The F-Droid profile uses `java-25-openjdk-devel`, available in
+Fedora 45. SDK platforms, emulators, and manifest editors remain
+outside this repository-publishing profile.
 
 ### Pod layout
 

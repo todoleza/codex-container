@@ -1,0 +1,48 @@
+#!/bin/bash
+set -euo pipefail
+
+for tool in python java keytool fdroid apksigner zipalign aapt2 adb sqlite3 sdkmanager; do
+  command -v "${tool}"
+done
+python --version
+java -version
+fdroid --version
+fdroid update --help >/dev/null
+/opt/fdroid-venv/bin/python -m pip check
+apksigner --version
+aapt2 version
+adb version
+sqlite3 --version
+sdkmanager --version
+
+test -w /opt/project-venv
+python -c 'import sys; assert sys.prefix == "/opt/project-venv", sys.prefix'
+python -m pip check
+python -m pytest --version
+python - <<'PY'
+from importlib.metadata import version
+from packaging.version import Version
+for name, minimum in (('pytest', '8'), ('setuptools', '75')):
+    installed = version(name)
+    assert Version(installed) >= Version(minimum), f'{name} {installed} < {minimum}'
+    print(f'{name} {installed}')
+PY
+
+for temporary_dir in /tmp /var/tmp; do
+  if [ ! -w "${temporary_dir}" ] || [ ! -x "${temporary_dir}" ]; then
+    printf 'Temporary directory is not writable/searchable: %s\n' "${temporary_dir}" >&2
+    exit 1
+  fi
+done
+
+# Exercise zipalign on a disposable archive; its help exits nonzero.
+check_dir="$(mktemp -d)"
+trap 'rm -rf -- "${check_dir}"' EXIT
+python - "${check_dir}/input.apk" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], 'w') as archive:
+    archive.writestr('assets/toolchain-check.txt', 'F-Droid toolchain check\n')
+PY
+zipalign -f 4 "${check_dir}/input.apk" "${check_dir}/aligned.apk"
+zipalign -c 4 "${check_dir}/aligned.apk"
+printf 'F-Droid repository toolchain OK\n'
