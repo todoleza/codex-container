@@ -198,3 +198,47 @@ Two user-facing entrypoints are prepared:
 
 - `run-in-container.sh` for direct `podman pod create` orchestration with explicit pod, infra, firewall, and app names
 - `run-in-podman-kube.sh` for a draft `podman kube play` workflow using Podman annotations for `keep-id` and infra naming
+
+## Future work
+
+### Opt-in nested Podman support
+
+Status: deferred, recorded 2026-11-09. Investigate a narrowly scoped launcher
+mode for running rootless Podman inside the app container. Keep it disabled by
+default; enabling it must be an explicit operator choice. This task does not
+authorize changing runtime privileges now.
+
+The reported nested Podman command exited with status 125:
+
+```text
+newuidmap 28098 0 1000 1 1 524288 65536
+newuidmap: write to uid_map failed: Operation not permitted
+Error: cannot set up namespace using "/usr/bin/newuidmap": should have setuid or have filecaps setuid
+```
+
+Read-only diagnostics in the investigating assistant's container found
+`NoNewPrivs: 1`, empty effective/bounding capability sets, mapping helpers with
+mode `0755` and no file capabilities, and `node:524288:65536` in both
+`/etc/subuid` and `/etc/subgid`. Those subordinate ranges were outside that
+container's outer UID/GID mappings. Recheck these facts in the failing runtime
+before implementing a fix; broader privilege cannot make unmapped IDs valid.
+
+Scope and acceptance criteria:
+
+- Configure nested subordinate ranges within the outer namespace's mapped
+  IDs and correctly installed `newuidmap`/`newgidmap` helpers.
+- Investigate the minimum `SETUID`/`SETGID` capabilities and relaxation of
+  `no-new-privileges`; test storage and seccomp requirements separately.
+  Avoid using blanket `--privileged` as the default solution.
+- Preserve firewall isolation: the app shares the sidecar's network namespace,
+  so do not grant it `NET_ADMIN`. Verify the nested workload cannot alter the
+  pod firewall or evade the enforced egress policy. If broader privilege is
+  required, document the loss of isolation as a separate explicit mode.
+- Test an actual nested build/run as the app user, file ownership in mounted
+  workspaces, and that normal launches retain their existing restrictions.
+- Document opt-in configuration, security implications, and any requirement to
+  create a new container. Update launcher tests and the project history when
+  implementing the mode.
+
+References: [Podman privilege controls](https://docs.podman.io/en/latest/markdown/podman-create.1.html#privileged)
+and [Linux user-namespace mapping rules](https://man7.org/linux/man-pages/man7/user_namespaces.7.html).
