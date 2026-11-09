@@ -236,7 +236,7 @@ fi
 
 : "${CODEX_ALLOWED_DOMAIN_CATEGORIES:=openai source_control os_packages containers language_packages jvm_dotnet schema_docs}"
 : "${CODEX_ALLOWED_DOMAINS_OPENAI:=api.openai.com auth.openai.com chatgpt.com}"
-: "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL:=github.com githubusercontent.com api.github.com gitlab.com bitbucket.org}"
+: "${CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL:=github.com githubusercontent.com raw.githubusercontent.com api.github.com gitlab.com bitbucket.org}"
 : "${CODEX_ALLOWED_DOMAINS_OS_PACKAGES:=alpinelinux.org archlinux.org centos.org copr.fedorainfracloud.org download.copr.fedorainfracloud.org debian.org fedoraproject.org ppa.launchpad.net ubuntu.com packages.microsoft.com}"
 : "${CODEX_ALLOWED_DOMAINS_CONTAINERS:=docker.com docker.io ghcr.io gcr.io mcr.microsoft.com quay.io}"
 : "${CODEX_ALLOWED_DOMAINS_LANGUAGE_PACKAGES:=cpan.org crates.io golang.org goproxy.io haskell.org hex.pm metacpan.org nodejs.org npmjs.com npmjs.org packagist.org pkg.go.dev pub.dev pypa.io pypi.org pypi.python.org pythonhosted.org ruby-lang.org rubygems.org rubyonrails.org rustup.rs yarnpkg.com}"

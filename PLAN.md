@@ -134,6 +134,10 @@ separate:
 - explicitly omitted legacy domains: `bower.io`, `continuum.io`,
   `jcenter.bintray.com`, `rubyforge.org`, and `rvm.io`
 
+The `source_control` defaults explicitly include `raw.githubusercontent.com`.
+Allowing `githubusercontent.com` only resolves that hostname; it does not
+automatically resolve or allow every subdomain.
+
 The SOCKS relay is disabled by default. It remains available as an explicit
 operator opt-in, but it changes the enforcement point from the sidecar's
 domain-resolved destination list to the host-side proxy policy.

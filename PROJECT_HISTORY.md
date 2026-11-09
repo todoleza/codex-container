@@ -1,5 +1,22 @@
 # Project History
 
+## 2026-11-09 - Allow GitHub raw content in the source-control category
+
+### Changed and evidence
+- Added `raw.githubusercontent.com` to `CODEX_ALLOWED_DOMAINS_SOURCE_CONTROL`
+  in `run-in-container.sh` and updated the documented default. The user
+  reported access failure; the existing `githubusercontent.com` entry does
+  not automatically resolve its subdomains into the firewall address sets.
+- Kept the change to the requested host in the existing default category.
+  Explicit category/domain overrides retain their existing behavior.
+
+### Validation
+- Launcher firewall-mode and environment/snapshot tests, shell syntax, and
+  `git diff --check` passed. Live policy was inspected and was already lifted
+  in this session; no live firewall changes or enforced-network access test
+  were performed. Existing pods need an operator policy update/reload or a
+  subsequent startup using the new defaults.
+
 ## 2026-11-09 - Generalize Fedora selection and finalize temporary-directory permissions
 
 ### Changed and evidence
