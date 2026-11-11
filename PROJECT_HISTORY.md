@@ -1,5 +1,58 @@
 # Project History
 
+## 2026-11-11 - Add an Alpine runtime profile and discoverable cache/config controls
+
+### Changed and decisions
+- Added the optional `alpine` profile with stable APK equivalents of default
+  tooling; Fedora/default remains unchanged. `profile.json` selects a distro
+  and self-based common profile. Validation enforces distro-local inheritance
+  and rejects incompatible package/repository catalogs. `aggregate` is an
+  explicit parity gap rather than a silently skipped dependency.
+- Reused Dockerfile.in, the staged Codex npm artifact, SOPS/runtime/user setup,
+  permission checks, and candidate promotion/rollback. Only distro setup,
+  account creation, package catalogs, and build-cache mounts differ. Added
+  `ALPINE_VERSION`/`APK_CACHE_DIR` and distro/base-image labels. Builds now
+  check the installed native Codex version before promotion.
+- Added external Alpine runtime caches using image metadata and architecture,
+  with `REPO_CACHE` defaulting to `/var/tmp/container_repo_cache`. Cache state
+  is separate from build caches and survives instance removal. Unlabelled or
+  unsupported images get no automatic cache mount.
+- Cache enablement uses `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`, preserving
+  explicit `0`. `--no-package-cache` overrides configuration for normal
+  launches, spawn, replace, and respawn, including batch respawn. Opt-out
+  creates no external cache directory or mount; existing mounts require
+  respawn and produce a notice when an existing container is reused.
+- Added static `help env` before env-file loading/Podman checks, with an
+  identical docs/environment.md reference. It covers launcher, firewall/DNS,
+  domain categories, proxy/sidecar, cache, wrapper, build, and artifact inputs,
+  their defaults and forwarding contexts; it never prints current credentials.
+- Updated README, usage notes, dependency catalogs, PLAN.md, and todo.txt.
+  Fedora runtime DNF configuration (including runtime-only skip_unavailable),
+  Arch/Debian, additional Alpine variants, and no-alt-screen remain deferred.
+
+### Evidence and validation
+- Inspected the staged Codex npm loader's Linux musl target selection and
+  selected Alpine 3.24 package sources (including the ExifTool subpackage and
+  procps compatibility alias). No edge repository was added. Direct package
+  tree fetching failed with `No route to host` under the current runtime
+  network; source inspection through web tools was partial, not a full install.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-build-profiles.py`: 15 passed.
+  Mocked `scripts/test-build-freshness.sh` passed, including Alpine pinning,
+  cache/label selection, promotion, and failure without image rotation.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-launcher-cli.py`: 20 passed,
+  including default/empty/zero cache settings, CLI/env precedence, metadata
+  isolation, batch opt-out, retained caches, existing-container notices, and
+  environment-reference coverage/default consistency without secret values.
+- All five existing launcher shell regressions passed. Bash/Zsh syntax,
+  generated Bash completion ShellCheck, all nine generated Alpine RUN shell
+  instructions, and `git diff --check` passed. Launcher ShellCheck retains
+  the same seven existing findings as HEAD, with no new findings.
+
+### Remaining host verification
+- Podman/Buildah are unavailable here. A real Alpine build, dependency
+  installation, non-root runtime/temporary-file checks, root APK installs,
+  external-cache ownership/reuse, and cache-free launches remain unverified.
+
 ## 2026-11-11 - Make launcher arguments explicit and add completion and bulk selection
 
 ### Changed and decisions

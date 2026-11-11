@@ -6,8 +6,8 @@ Run Codex in an unprivileged container while enforcing outbound network policy f
 
 ### Images
 
-- `Dockerfile.in`: template for the generated Fedora-based Codex runtime image
-- `container-deps/`: shared `dnf`, `copr`, `repos`, `collections`, and `containerfiles` catalogs
+- `Dockerfile.in`: shared template for Fedora and Alpine Codex runtime images
+- `container-deps/`: shared `apk`, `dnf`, `copr`, `repos`, `collections`, and `containerfiles` catalogs
 - `Dockerfile.firewall`: minimal Alpine firewall image
 - `build-images.sh`: top-level Buildah-first image builder consuming `dist/codex.tgz`
 - `build-images.py`: profile validation, retained Containerfile generation,
@@ -23,11 +23,13 @@ through one container-owned daemon process and shared control socket.
 ### Dependency profiles
 
 Runtime dependencies are selected through relative symlinks under
-`container-profiles/<name>/{dnf,copr,repos,collections,containerfiles}`. The matching shared
-catalogs live under `container-deps/{dnf,copr,repos,collections,containerfiles}`.
+`container-profiles/<name>/{apk,dnf,copr,repos,collections,containerfiles}`. The matching shared
+catalogs live under `container-deps/{apk,dnf,copr,repos,collections,containerfiles}`.
 The build driver discovers profile names from those directories, requires
-`default` as the base membership of every other profile, and does not require a
-source edit when a profile is added. SCAD remains unselected. Generated
+`default` as the default Fedora base. Optional `profile.json` selects `distro`
+and a self-based `base_profile`; `alpine` is its own Alpine base. Inheritance
+and catalog validation are distro-local; adding descendants of a supported
+base does not require a source edit. SCAD remains unselected. Generated
 Containerfiles are retained per profile under `.build-cache/profiles/` and use
 the shared DNF cache and builder layer store.
 Generated DNF installs enable `keepcache`, retaining downloaded RPM payloads in
@@ -35,9 +37,9 @@ that shared cache across profile branches and later builds.
 The build driver derives `TZ` from the build host and passes it explicitly to
 every runtime profile build, falling back to `UTC` when host detection fails.
 
-Each generated Containerfile builds an identical internal `codex-common` stage
-from the default profile's repositories and packages plus SOPS, runtime files,
-and user setup. Every published profile derives directly from that stage, adds
+Each generated Containerfile builds an internal `codex-common` stage from its
+base profile plus SOPS, runtime files, and user setup. Common stages are
+identical within a distro/base family. Every published profile adds
 only its dependency delta, installs its selected collections, and installs the
 frequently changing Codex artifact last. The internal stage is not published
 and no profile depends on an existing `codex:default` tag.
@@ -80,7 +82,7 @@ Google SDK binaries require x86_64, and SDK license
 acceptance follows the fragment's `ARG ANDROID_ACCEPT_LICENSES` default, with
 an explicitly set `ANDROID_ACCEPT_LICENSES` build environment variable taking
 precedence. The user's chosen fragment default is now `1`.
-All runtime profiles default to `fedora:latest`, configurable with the
+Fedora runtime profiles default to `fedora:latest`, configurable with the
 `FEDORA_VERSION` build environment variable. Runtime builds use `--pull=always`
 to refresh the selected base and derive the default DNF cache name from the
 tag (`.build-cache/dnf-fedora-<tag>`), with `DNF_CACHE_DIR` retaining precedence.
@@ -88,6 +90,32 @@ DNF refreshes metadata when the changed base invalidates its build layer.
 The F-Droid profile currently uses `java-25-openjdk-devel`.
 SDK platforms, emulators, and manifest editors remain
 outside this repository-publishing profile.
+
+### Alpine runtime and external cache controls
+
+The optional `alpine` profile defaults to `alpine:latest`, configurable through
+`ALPINE_VERSION`, with stable APK catalog equivalents of default tooling.
+`aggregate` remains a documented package-parity gap. `APK_CACHE_DIR` overrides
+the per-Alpine-tag build cache. Fedora profiles, shared artifact handling,
+promotion/rollback, runtime scripts, and firewall boundaries are preserved.
+
+Runtime APK caches default through `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`;
+explicit `0` disables them. `--no-package-cache` overrides environment settings
+for launches/spawn/replace/respawn, including batch respawn. Cache support uses
+image distro/base labels and architecture; unsupported/unlabelled images have
+no automatic cache mount. `REPO_CACHE` defaults to
+`/var/tmp/container_repo_cache`, segregated by distro/tag/architecture.
+Caches survive instance cleanup; existing mounts require respawn to change.
+
+`help env` prints the static public environment reference before env loading
+or Podman checks. It includes firewall/DNS/domain controls, forwarding contexts,
+cache settings, and builder/artifact settings; docs/environment.md matches that
+output. Values and credentials are never displayed by this command.
+
+Remaining gates: real Alpine build, non-root/runtime checks, root APK installs,
+and cache reuse on a capable Podman/Buildah host. Fedora runtime DNF settings
+(including runtime-only skip_unavailable), Arch/Debian, additional Alpine
+variants, and --no-alt-screen remain follow-up work.
 
 ### Pod layout
 

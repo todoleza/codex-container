@@ -2,7 +2,7 @@
 
 This repo creates container with Codex CLI in a rootless Podman pod with:
 
-- a Fedora-based Codex runtime image
+- a Fedora-based default Codex runtime and an optional Alpine runtime
 - a minimal Alpine firewall sidecar
 - a direct Podman launcher
 - an experimental `podman kube play` launcher
@@ -28,10 +28,10 @@ The image build defaults to `buildah bud`; set `CONTAINER_CLI=podman` to use
 Podman as an override. The runtime image is generated from `Dockerfile.in`;
 `build-images.sh` is a compatibility entrypoint for the Python build driver.
 It validates profile symlinks and expands the selected `container-deps/dnf/*.dnf`
-components into separate DNF install layers. Runtime builds use `fedora:latest`
+components into separate DNF install layers. Fedora runtime builds use `fedora:latest`
 by default; set `FEDORA_VERSION=45` (or another Fedora image tag) to pin the
 base. Each runtime build checks the registry with `--pull=always`.
-All profiles reuse a repo-local DNF cache at `.build-cache/dnf-fedora-<tag>`;
+Fedora profiles reuse a repo-local DNF cache at `.build-cache/dnf-fedora-<tag>`;
 the default is `.build-cache/dnf-fedora-latest`. Set `DNF_CACHE_DIR=/path/to/cache`
 to share or relocate it. Generated DNF
 install commands enable `keepcache`, so RPM payloads remain in this cache for
@@ -40,7 +40,7 @@ keeps unchanged `RUN dnf ...` steps from executing again.
 Runtime builds receive the build host's timezone as the `TZ` build argument;
 an explicit host `TZ` wins, followed by `/etc/localtime`, `timedatectl`, and a
 final `UTC` fallback.
-Every generated Containerfile has an identical internal `codex-common` stage
+Containerfiles sharing a distro/base profile have an identical internal `codex-common` stage
 containing the default packages, SOPS, runtime files, and user setup. Profile
 dependencies derive directly from that stage, and the staged Codex artifact is
 installed only in the final `codex-profile` stage. A Codex-only update therefore
@@ -55,7 +55,8 @@ With no selector, the builder creates the lean `codex:default` image. Use
 repeated or comma-separated `--profile` values to build exactly those profiles,
 or `--all-profiles` (optionally with `--no-profile`). Available build profiles
 are discovered from directories under `container-profiles/`; `default` is the
-required base, and every other profile must include its membership. Adding a
+required Fedora base. Alpine is a separate base profile; descendants include
+their configured base membership within the same distro. Adding a
 valid profile directory and symlinks does not require a build-driver change.
 Each successful build first builds the hard-dependency `codex-firewall` image,
 then builds the selected runtime profiles. Each runtime build uses a candidate
@@ -84,6 +85,29 @@ secrets components (`10`-`30`), infrastructure (`40`-`42`), Python (`50`),
 media (`60`), F-Droid (`80`), and disabled components (`90`). This lets `media` reuse the
 Python prefix and `full` reuse the infrastructure prefix without making one
 published profile image inherit another.
+
+The additional `alpine` profile uses stable Alpine packages, Bash, and the same
+Codex artifact/runtime integration:
+
+```bash
+./build-images.sh --profile alpine
+./run-in-container.sh spawn -p alpine
+./run-in-container.sh respawn -p alpine --no-package-cache
+```
+
+Set `ALPINE_VERSION` to pin the Alpine base tag (default `latest`) and
+`APK_CACHE_DIR` to override `.build-cache/apk-alpine-<tag>` for builds.
+Runtime APK caches are separate: `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`
+enables them unless explicitly set to `0`; `--no-package-cache` opts out for
+one launch/spawn/replace/respawn. `REPO_CACHE` defaults to
+`/var/tmp/container_repo_cache`, partitioned by distro, base tag, and
+architecture. Existing container mounts require respawn to change.
+The initial Alpine parity gap is `aggregate`; see the
+[Alpine package mapping](container-deps/apk/README.md).
+
+Run `./run-in-container.sh help env` for all public settings and documented
+defaults, including firewall/DNS settings and their forwarding boundaries.
+The same [environment reference](docs/environment.md) is available here.
 
 The optional `fdroid` profile supplies the toolchain described in
 `fdroid-repo.md`: Java 25, Android CLI tools, Build Tools 36.0.0 (`apksigner`,

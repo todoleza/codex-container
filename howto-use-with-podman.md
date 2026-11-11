@@ -39,9 +39,10 @@ upstream version for its artifact type with a 1 second curl timeout; override it
 with `CODEX_ARTIFACT_BUILD_TIMEOUT=SECONDS`. If the build-time check cannot
 complete, the build continues with a warning. If the staged artifact is known to
 be stale, an interactive terminal asks whether to refresh, continue, or abort.
-In batch mode it does not prompt and fails by default. Batch mode is enabled by
-either `--batch`, `--non-interactive`, `CODEX_CONTAINER_BATCH=1`,
-`INTERACTIVE=0`, or non-TTY stdin. Override stale handling with
+In batch mode it does not prompt and fails by default. Builder batch mode uses
+`--batch`, `--non-interactive`, or `CODEX_CONTAINER_BATCH=1`. Artifact shell
+commands also recognize `INTERACTIVE=0` and non-TTY stdin; use explicit batch
+mode for automated image builds. Override stale handling with
 `CODEX_ARTIFACT_STALE_POLICY=continue|refresh|fail`.
 
 The runtime build is generated from `Dockerfile.in`. Sorted
@@ -57,7 +58,7 @@ The build driver detects the build host's timezone and supplies it as the
 runtime image's `TZ` build argument. Detection uses an explicit host `TZ`, the
 `/etc/localtime` zoneinfo link, or `timedatectl`, with `UTC` as the fallback.
 
-The base defaults to `fedora:latest`; the selected tag also determines the
+The Fedora base defaults to `fedora:latest`; the selected tag also determines the
 default DNF cache name (`.build-cache/dnf-fedora-latest` for the default).
 Set `FEDORA_VERSION` to choose another Fedora image tag without editing source:
 
@@ -71,7 +72,7 @@ reruns DNF metadata refresh before package installation. The explicit
 `DNF_CACHE_DIR` override takes precedence over tag-based cache naming; existing
 release-specific caches are preserved.
 
-All profile Containerfiles contain the same internal `codex-common` stage with
+Profiles with the same distro/base membership share an internal `codex-common` stage with
 the default packages, SOPS, runtime files, and user setup. Profile-specific
 dependencies are added from that stage, and Codex is installed last. Updating
 only `dist/codex.tgz` should therefore rebuild the final Codex layer for each
@@ -88,9 +89,67 @@ install`. Each file should contain Ansible collection requirement list entries:
   version: main
 ```
 
-The runtime image includes `age` from Fedora packages and the latest stable
+The runtime image includes `age` from distro packages and the latest stable
 SOPS release binary by default. Pin SOPS with
 `SOPS_VERSION=<version> ./build-images.sh`.
+
+### Alpine runtime and external package caches
+
+Build and select the additional Alpine profile without changing Fedora defaults:
+
+```bash
+./build-images.sh --profile alpine
+ALPINE_VERSION=3.24 APK_CACHE_DIR=/path/to/build-cache ./build-images.sh --profile alpine
+codex spawn -p alpine
+codex -p alpine -- --help
+codex spawn -p alpine --no-package-cache
+codex respawn -i 3-6,9 --no-package-cache
+```
+
+Alpine uses its stable main/community repositories, an APK counterpart of the
+default tool groups, and the same Bash runtime scripts and staged Codex npm
+artifact. `aggregate` is currently omitted; other translated packages and that
+explicit parity gap are described in [the APK catalog](container-deps/apk/README.md).
+Builds fail for declared packages that cannot be installed. Additional Alpine
+variants, Arch, and Debian remain follow-up work.
+
+Runtime caches use `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`: unset/empty enables,
+explicit `0` disables, and values other than `0|1` are rejected. Launcher CLI
+`--no-package-cache` overrides both caller environment and env-file settings.
+It is accepted for normal launches, spawn, replace, and respawn before the
+Codex/shell payload boundary, and propagates to each target in batch respawn.
+
+`REPO_CACHE` defaults with `:=` to `/var/tmp/container_repo_cache`. Alpine
+caches mount at `/var/cache/apk`, backed by
+`$REPO_CACHE/alpine/<base-tag>/<image-architecture>/apk`. Choose another root
+through caller environment or a launcher env file. The host directory is
+created only when an enabled, supported cache is needed for a new container.
+APK retains packages through `/etc/apk/cache` pointing at that directory.
+Root entry/package installs use this cache; a writable external cache does not
+grant the ordinary app user package-install privileges.
+
+An opt-out adds no external cache mount and creates no cache directory. It
+leaves existing host caches and ordinary container-local package caching alone.
+Running containers retain their existing mounts; an opt-out while reusing one
+prints a notice to use respawn. Removal retains the external cache. Build caches
+are independent and continue using `APK_CACHE_DIR` or `DNF_CACHE_DIR`.
+
+The launcher uses image labels `codex.container.distro` and
+`codex.container.base`, plus the image architecture, to choose supported cache
+behavior. Explicit `CONTAINER_IMAGE` overrides work the same way. Unlabelled
+images and unsupported distros retain launch behavior without automatic cache
+mounts. This first adapter is Alpine-only; Fedora runtime DNF cache/config
+integration, including runtime-only `skip_unavailable`, remains deferred.
+
+### Environment settings
+
+Use `codex help env` for the complete public configuration reference without
+loading env files or needing Podman. It prints static defaults, not current
+values or credentials. See [the identical reference](docs/environment.md) for
+launcher and firewall/DNS variables, domain categories, cache controls, proxy
+and sidecar inputs, builder settings, runtime-wrapper defaults, and artifact
+controls. `CODEX_ENV_*` targets only the app; firewall settings have their own
+explicit forwarding and direct-script contexts described there.
 
 The firewall image resolver is selected before image creation:
 
