@@ -25,7 +25,18 @@ if cmd == 'inspect':
     print('true' if 'Running' in args[2] else '0.1.0')
 if cmd == 'image':
     if args[1] == 'inspect':
-        print(args[-1].split(':')[-1] if 'container.profile' in args[3] else '0.1.0')
+        query = args[3]
+        image = args[-1]
+        if 'container.profile' in query:
+            print(image.split(':')[-1])
+        elif 'container.distro' in query:
+            print(os.environ.get('MOCK_IMAGE_DISTRO', 'alpine' if image == 'codex:alpine' else 'fedora'))
+        elif 'container.base' in query:
+            print(os.environ.get('MOCK_IMAGE_BASE', 'alpine:3.24'))
+        elif 'Architecture' in query:
+            print(os.environ.get('MOCK_IMAGE_ARCH', 'amd64'))
+        else:
+            print('0.1.0')
 if cmd == 'pod':
     action = args[1]
     if action == 'exists':
@@ -70,10 +81,10 @@ class LauncherCLI(unittest.TestCase):
                         CODEX_RELEASE_CHECK_ON_SPAWN='0', STARTUP_SUMMARY_HOLD_SECONDS='0',
                         CODEX_CONTAINER_GLOBAL_ENV_FILE=str(self.base / 'absent.env'),
                         CODEX_CONTAINER_ENV_FILES='', CODEX_CONTAINER_PROFILE='default',
-                        PROXY_ENABLE='0', SIDECARS='')
+                        PROXY_ENABLE='0', SIDECARS='', REPO_CACHE=str(self.base / 'package-cache'))
         for name in ('CODEX_CONTAINER_WORKSPACE_ENV_FILE', 'CODEX_CONTAINER_LAUNCHER_SNAPSHOT',
                      'CODEX_CONTAINER_LAUNCHER_SNAPSHOT_PATH', 'CONTAINER_EXEC_COMMAND',
-                     'WORKSPACE_ROOT_DIR', 'CONTAINER_IMAGE'):
+                     'WORKSPACE_ROOT_DIR', 'CONTAINER_IMAGE', 'CODEX_PACKAGE_CACHE_ENABLE'):
             self.env.pop(name, None)
 
     def run_cli(self, *args, ok=True, env=None):
@@ -120,7 +131,7 @@ class LauncherCLI(unittest.TestCase):
                      ('rm', 'all'), ('rm', 'all', '--workspace', '--tree'),
                      ('rm', 'all', '--everywhere', '-d', str(self.work)),
                      ('rm', 'all', '--workspace', '-i', '1'), ('spawn', '-i', '1,2'),
-                     ('list', 'extra'), ('replace', '--model', 'x'), ('shell',)]:
+                     ('status', '--no-package-cache'), ('help', 'unknown'), ('list', 'extra'), ('replace', '--model', 'x'), ('shell',)]:
             self.run_cli(*args, ok=False)
         self.assertEqual(self.calls(), [])
 
@@ -231,6 +242,80 @@ class LauncherCLI(unittest.TestCase):
         self.assertNotIn('FIRST', apps[1])
         self.assertIn('codex:infra', apps[1])
 
+    def app_runs(self):
+        return [c for c in self.calls() if c[0] == 'run' and c[c.index('--name') + 1].endswith('-app')]
+
+    def test_package_cache_default_empty_and_retention(self):
+        for value in (None, ''):
+            env = {} if value is None else {'CODEX_PACKAGE_CACHE_ENABLE': value}
+            self.run_cli('replace', '-p', 'alpine', env=env)
+            self.assertTrue(any(':/var/cache/apk:z' in arg for arg in self.app_runs()[-1]))
+        cache = self.base / 'package-cache/alpine/3.24/amd64/apk'
+        self.assertTrue(cache.is_dir())
+        (cache / 'saved.apk').touch()
+        self.run_cli('rm', '-p', 'alpine')
+        self.assertTrue((cache / 'saved.apk').exists())
+
+    def test_cache_disabled_and_invalid_settings(self):
+        self.run_cli('spawn', '-p', 'alpine', env={'CODEX_PACKAGE_CACHE_ENABLE':'0'})
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+        self.assertFalse((self.base / 'package-cache').exists())
+        self.run_cli('replace', '-p', 'alpine', env={'CODEX_PACKAGE_CACHE_ENABLE':'invalid'}, ok=False)
+        self.run_cli('replace', '-p', 'alpine', '--no-package-cache', env={'CODEX_PACKAGE_CACHE_ENABLE':'invalid'})
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+
+    def test_cache_env_file_and_cli_precedence(self):
+        (self.work / '.codex-container.env').write_text('CODEX_PACKAGE_CACHE_ENABLE=0\n')
+        self.run_cli('replace', '-p', 'alpine')
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+        self.run_cli('replace', '-p', 'alpine', env={'CODEX_PACKAGE_CACHE_ENABLE':'1'})
+        self.assertTrue(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+        self.run_cli('replace', '-p', 'alpine', '--no-package-cache', env={'CODEX_PACKAGE_CACHE_ENABLE':'1'})
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+
+    def test_cache_metadata_and_isolation(self):
+        self.run_cli('replace', '-p', 'alpine', env={'MOCK_IMAGE_ARCH':'arm64'})
+        self.assertTrue((self.base / 'package-cache/alpine/3.24/arm64/apk').is_dir())
+        self.run_cli('replace', env={'CONTAINER_IMAGE':'custom:image', 'MOCK_IMAGE_DISTRO':'alpine', 'MOCK_IMAGE_BASE':'alpine:3.23'})
+        self.assertTrue((self.base / 'package-cache/alpine/3.23/amd64/apk').is_dir())
+        self.run_cli('replace', env={'CONTAINER_IMAGE':'custom:unlabelled', 'MOCK_IMAGE_DISTRO':''})
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+        self.run_cli('replace', env={'CONTAINER_IMAGE':'custom:bad-tag', 'MOCK_IMAGE_DISTRO':'alpine', 'MOCK_IMAGE_BASE':'alpine:../escape'})
+        self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
+
+    def test_cache_batch_opt_out_and_existing_mount_notice(self):
+        self.register(1, profile='alpine')
+        self.register(2, self.work / 'second', 'alpine')
+        output = self.run_cli('spawn', '-i', '1', '--no-package-cache')
+        self.assertIn('existing mounts are unchanged', output.stderr)
+        self.assertEqual(self.app_runs(), [])
+        self.run_cli('respawn', '-i', '1-2', '--no-package-cache')
+        self.assertEqual(len(self.app_runs()), 2)
+        self.assertTrue(all(not any('/var/cache/apk' in arg for arg in c) for c in self.app_runs()))
+        self.assertFalse((self.base / 'package-cache').exists())
+
+    def test_environment_help_static_and_complete(self):
+        import re
+        bad = self.base / 'bad.env'
+        bad.write_text('invalid env\n')
+        output = self.run_cli('help', 'env', env={'CODEX_CONTAINER_ENV_FILES':str(bad),
+                                               'OPENAI_API_KEY':'secret-test-value'}).stdout
+        self.assertEqual(output, (REPO/'docs/environment.md').read_text())
+        self.assertNotIn('secret-test-value', output)
+        self.assertEqual(self.calls(), [])
+        source = LAUNCHER.read_text()
+        names = set(re.findall(r'^\s*: "\$\{([A-Z][A-Z0-9_]*):=', source, re.M))
+        for name in names:
+            self.assertIn('`'+name+'`', output)
+        for name, default in re.findall(r'^\s*: "\$\{([A-Z][A-Z0-9_]*):=(.*)\}"$', source, re.M):
+            escaped = (default or '(empty)').replace('|', '\\|')
+            self.assertIn('| `'+name+'` | `'+escaped+'` |', output)
+        firewall = (REPO/'firewall/firewall-common').read_text()
+        for name in set(re.findall(r'\$\{(CODEX_FIREWALL_[A-Z_]+)', firewall)):
+            self.assertIn('`'+name+'`', output)
+        for internal in ('CODEX_CONTAINER_LAUNCHER_SNAPSHOT', 'CODEX_CONTAINER_BATCH_VERIFY_REMOVAL'):
+            self.assertNotIn(internal, output)
+
     def test_completion_generation_and_bash(self):
         bad = self.base / 'bad.env'
         bad.write_text('invalid env\n')
@@ -255,6 +340,8 @@ check --tree rm all --t
 check zsh completion z
 check --profile respawn -i 4 --p
 check --id copy --i
+check --no-package-cache spawn --no-package
+check env help e
 check 'with space' -d 'with'
 COMP_WORDS=(codex copy source --i); COMP_CWORD=3; _codex_container_launcher
 [[ ${#COMPREPLY[@]} = 0 ]] || exit 1
