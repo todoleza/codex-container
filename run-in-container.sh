@@ -64,42 +64,86 @@ load_env_file() {
   LOADED_ENV_FILES+=("${file}")
 }
 
-detect_requested_work_dir() {
-  local args=("$@")
-  local idx=0
+# Shared CLI vocabulary also feeds the generated shell completers.
+LAUNCHER_COMMANDS=(help completion profiles list status name spawn enter shell rootenter rootshell fwenter fwshell replace respawn destroy rm kill copy push pull fetch)
+LAUNCHER_VALUE_OPTIONS=(-i --id -d --wd -p --profile)
+LAUNCHER_FLAG_OPTIONS=(-h --help --no-firewall --list-profiles)
+REMOVAL_SCOPES=(--workspace --ancestors --tree --everywhere)
+ACTION=start
+ACTION_ARGS=()
+START_ARGS=()
+CLI_NO_FIREWALL=0
+CLI_CODEX_CONTAINER_PROFILE=""
+SELECTOR_ID=""
+WORK_DIR_SELECTED=0
+BULK_REMOVE=0
+BULK_SCOPE=""
 
-  while [ "${idx}" -lt "${#args[@]}" ]; do
-    case "${args[$idx]}" in
-      --wd)
-        if [ -n "${args[$((idx + 1))]:-}" ]; then
-          printf '%s\n' "${args[$((idx + 1))]}"
-          return
-        fi
-        ;;
-      --)
-        break
-        ;;
-    esac
-    idx=$((idx + 1))
-  done
-
-  printf '%s\n' "${WORK_DIR}"
+cli_error() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 2
 }
 
-detect_requested_profile() {
-  local args=("$@")
-  local idx=0
-  while [ "${idx}" -lt "${#args[@]}" ]; do
-    case "${args[$idx]}" in
-      --profile)
-        if [ -n "${args[$((idx + 1))]:-}" ]; then
-          printf '%s\n' "${args[$((idx + 1))]}"
-          return
-        fi
-        ;;
-      --) break ;;
+cli_contains() {
+  local wanted="$1" item
+  shift
+  for item in "$@"; do
+    [[ "$item" != "$wanted" ]] || return 0
+  done
+  return 1
+}
+
+parse_args() {
+  local token
+  while (( $# )); do
+    token="$1"
+    if cli_contains "$token" "${LAUNCHER_VALUE_OPTIONS[@]}"; then
+      (( $# >= 2 )) && [[ -n "$2" && "$2" != -* ]] || cli_error "$token requires a value."
+      case "$token" in
+        -i|--id)
+          [[ -z "$SELECTOR_ID" ]] || cli_error 'Specify --id only once; use a comma-separated list for multiple IDs.'
+          SELECTOR_ID="$2" ;;
+        -d|--wd) WORK_DIR="$2"; WORK_DIR_SELECTED=1 ;;
+        -p|--profile) CLI_CODEX_CONTAINER_PROFILE="$2" ;;
+      esac
+      shift 2
+      continue
+    fi
+    case "$token" in
+      -h|--help) ACTION=help; ACTION_ARGS=(); return ;;
+      --no-firewall) CLI_NO_FIREWALL=1; shift ;;
+      --list-profiles)
+        [[ "$ACTION" = start ]] || cli_error '--list-profiles cannot be combined with a command.'
+        ACTION=profiles; shift ;;
+      --)
+        shift
+        case "$ACTION" in
+          start|replace) START_ARGS=("$@"); return ;;
+          enter|shell|rootenter|rootshell|fwenter|fwshell|copy|push|pull|fetch)
+            ACTION_ARGS=("$@"); return ;;
+          *) cli_error "$ACTION does not accept a payload after --." ;;
+        esac ;;
+      --workspace|--ancestors|--tree|--everywhere)
+        [[ "$ACTION" = rm && "$BULK_REMOVE" = 1 ]] || cli_error "$token is only valid with rm all."
+        [[ -z "$BULK_SCOPE" ]] || cli_error 'rm all requires exactly one scope.'
+        BULK_SCOPE="$token"; shift ;;
+      --work_dir) cli_error '--work_dir has been replaced by -d/--wd.' ;;
+      -*) cli_error "Unknown launcher option: $token. Put Codex arguments after --." ;;
+      *)
+        if [[ "$ACTION" = start ]]; then
+          cli_contains "$token" "${LAUNCHER_COMMANDS[@]}" || cli_error "Unknown launcher command: $token. Put Codex arguments after --."
+          ACTION="$token"; shift
+        elif [[ "$ACTION" = rm && "$token" = all && ${#ACTION_ARGS[@]} = 0 && "$BULK_REMOVE" = 0 ]]; then
+          BULK_REMOVE=1; shift
+        else
+          case "$ACTION" in
+            enter|shell|rootenter|rootshell|fwenter|fwshell|copy|push|pull|fetch)
+              ACTION_ARGS=("$@"); return ;;
+            replace) cli_error 'Put Codex arguments for replace after --.' ;;
+            *) ACTION_ARGS+=("$token"); shift ;;
+          esac
+        fi ;;
     esac
-    idx=$((idx + 1))
   done
 }
 
@@ -220,8 +264,127 @@ prepare_git_metadata_mounts() {
   done
 }
 
-EARLY_WORK_DIR="$(resolve_workspace_root "$(detect_requested_work_dir "$@")")"
-CLI_CODEX_CONTAINER_PROFILE="$(detect_requested_profile "$@")"
+generate_completion() {
+  [[ $# = 1 && ( "$1" = bash || "$1" = zsh ) ]] || cli_error 'Usage: completion bash|zsh'
+  local shell="$1" invocation="${0##*/}"
+  if [[ "$shell" = zsh ]]; then
+    printf '#compdef %q\n' "$invocation"
+  fi
+  printf '_CC_COMMANDS=%q\n' "${LAUNCHER_COMMANDS[*]}"
+  printf '_CC_VALUE_OPTIONS=%q\n' "${LAUNCHER_VALUE_OPTIONS[*]}"
+  printf '_CC_OPTIONS=%q\n' "${LAUNCHER_VALUE_OPTIONS[*]} ${LAUNCHER_FLAG_OPTIONS[*]} --"
+  printf '_CC_SCOPES=%q\n' "${REMOVAL_SCOPES[*]}"
+  cat <<'COMMON'
+# Only inspect words before the cursor; never execute the launcher on Tab.
+_codex_container_context() {
+  local _cc_word _cc_pending='' _cc_command='' _cc_bulk=0
+  _cc_context=launcher
+  _cc_choices="$_CC_COMMANDS $_CC_OPTIONS"
+  for _cc_word in "$@"; do
+    if [[ -n "$_cc_pending" ]]; then
+      _cc_pending=''
+      _cc_context=launcher
+      continue
+    fi
+    if [[ " $_CC_VALUE_OPTIONS " == *" $_cc_word "* ]]; then
+      _cc_pending="$_cc_word"
+      case "$_cc_word" in
+        -d|--wd) _cc_context=directory ;;
+        *) _cc_context=value ;;
+      esac
+      continue
+    fi
+    case "$_cc_word" in
+      --) _cc_context=payload; return ;;
+      -h|--help|--list-profiles) _cc_context=payload; return ;;
+      -*) continue ;;
+    esac
+    if [[ -z "$_cc_command" ]]; then
+      _cc_command="$_cc_word"
+    elif [[ "$_cc_command" = rm && "$_cc_word" = all && "$_cc_bulk" = 0 ]]; then
+      _cc_bulk=1
+    else
+      case "$_cc_command" in
+        copy|push|pull|fetch) _cc_context=files; _cc_choices='' ;;
+        *) _cc_context=payload ;;
+      esac
+      return
+    fi
+  done
+  [[ -z "$_cc_pending" ]] || return 0
+  case "$_cc_command" in
+    '') _cc_choices="$_CC_COMMANDS $_CC_OPTIONS" ;;
+    completion) _cc_choices='bash zsh' ;;
+    rm)
+      if [[ "$_cc_bulk" = 1 ]]; then
+        _cc_choices="$_CC_SCOPES $_CC_VALUE_OPTIONS"
+      else
+        _cc_choices="all $_CC_OPTIONS"
+      fi ;;
+    copy|push|pull|fetch) _cc_context=files; _cc_choices="$_CC_OPTIONS" ;;
+    *) _cc_choices="$_CC_OPTIONS" ;;
+  esac
+}
+COMMON
+  if [[ "$shell" = bash ]]; then
+    cat <<'BASH_COMPLETION'
+_codex_container_launcher() {
+  local _cc_context _cc_choices _cc_candidate
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=()
+  _codex_container_context "${COMP_WORDS[@]:1:COMP_CWORD-1}"
+  case "$_cc_context" in
+    directory|files)
+      if [[ "$_cc_context" = directory ]]; then
+        while IFS= read -r _cc_candidate; do COMPREPLY+=("$_cc_candidate"); done < <(compgen -d -- "$cur")
+      else
+        if [[ "$cur" = -* && -n "$_cc_choices" ]]; then
+          while IFS= read -r _cc_candidate; do COMPREPLY+=("$_cc_candidate"); done < <(compgen -W "$_cc_choices" -- "$cur")
+        else
+          while IFS= read -r _cc_candidate; do COMPREPLY+=("$_cc_candidate"); done < <(compgen -f -- "$cur")
+        fi
+      fi
+      compopt -o filenames 2>/dev/null || true
+      ;;
+    launcher)
+      while IFS= read -r _cc_candidate; do COMPREPLY+=("$_cc_candidate"); done < <(compgen -W "$_cc_choices" -- "$cur") ;;
+  esac
+}
+BASH_COMPLETION
+    printf 'complete -F _codex_container_launcher %q\n' "$invocation"
+  else
+    cat <<'ZSH_COMPLETION'
+_codex_container_launcher() {
+  local _cc_context _cc_choices
+  local -a _cc_candidates
+  _codex_container_context "${(@)words[2,CURRENT-1]}"
+  case "$_cc_context" in
+    directory) _path_files -/ ;;
+    files)
+      if [[ "${words[CURRENT]}" = -* && -n "$_cc_choices" ]]; then
+        _cc_candidates=( ${=_cc_choices} )
+        compadd -- "${_cc_candidates[@]}"
+      else
+        _files
+      fi ;;
+    launcher)
+      _cc_candidates=( ${=_cc_choices} )
+      compadd -- "${_cc_candidates[@]}" ;;
+    *) return 0 ;;
+  esac
+}
+ZSH_COMPLETION
+    printf 'compdef _codex_container_launcher %q\n' "$invocation"
+  fi
+}
+
+parse_args "$@"
+# Completion is intentionally independent of env files, Podman, and runtime state.
+if [[ "$ACTION" = completion ]]; then
+  generate_completion "${ACTION_ARGS[@]}"
+  exit 0
+fi
+EARLY_WORK_DIR="$(resolve_workspace_root "$WORK_DIR")"
 : "${CODEX_CONTAINER_GLOBAL_ENV_FILE:=${HOME}/.local/share/codex-container/env}"
 : "${CODEX_CONTAINER_WORKSPACE_ENV_FILE:=${EARLY_WORK_DIR}/.codex-container.env}"
 
@@ -363,13 +526,7 @@ CODEX_APP_ENV_ARGS_ARRAY=()
 SIDECAR_IDS_ARRAY=()
 CLEANUP_SIDECAR_IDS_ARRAY=()
 CODEX_EXTRA_ADD_DIRS=""
-ACTION="start"
-ACTION_ARGS=()
-START_ARGS=()
-CLI_NO_FIREWALL=0
-SELECTOR_ID=""
 SELECTOR_STATE_DIR=""
-WORK_DIR_SELECTED=0
 WORKSPACE_ALIAS=""
 WORKSPACE_SEQ=""
 REGISTRY_ROOT=""
@@ -755,7 +912,8 @@ write_optional_state_file() {
 usage() {
   cat <<'EOF'
 Usage:
-  run-in-container.sh [--profile NAME] [--no-firewall] [--wd DIR] [CODEX_ARGS...]
+  run-in-container.sh [-p NAME] [--no-firewall] [-d DIR] [-- CODEX_ARGS...]
+  run-in-container.sh completion bash|zsh
   run-in-container.sh profiles
   run-in-container.sh --list-profiles
   run-in-container.sh list
@@ -769,14 +927,16 @@ Usage:
   run-in-container.sh [--id ID|--wd DIR] rootshell COMMAND...
   run-in-container.sh [--id ID|--wd DIR] fwenter [COMMAND...]
   run-in-container.sh [--id ID|--wd DIR] fwshell COMMAND...
-  run-in-container.sh [--id ID|--wd DIR] replace [CODEX_ARGS...]
+  run-in-container.sh [--id ID|--wd DIR] replace [-- CODEX_ARGS...]
   run-in-container.sh [--id ID|--wd DIR] respawn [ID]
   run-in-container.sh [--id ID|--wd DIR] destroy|rm|kill [ID]
+  run-in-container.sh rm all --workspace|--ancestors|--tree|--everywhere [-p NAME]
   run-in-container.sh [--id ID|--wd DIR] copy|push LOCAL_PATH CONTAINER_PATH
   run-in-container.sh [--id ID|--wd DIR] pull|fetch CONTAINER_PATH LOCAL_PATH
 
 Launcher commands:
-  help          Show this help. Use --help for Codex CLI help.
+  help          Show launcher help (also -h/--help). Use -- --help for Codex help.
+  completion    Generate Bash or Zsh completion for the invoked command name.
   profiles      List locally available Codex profile images.
   list          List known workspace containers.
   status        Show resolved workspace container names and state.
@@ -795,12 +955,28 @@ Launcher commands:
   copy, push    Copy from the host into the workspace container.
   pull, fetch   Copy from the workspace container to the host.
 
-The launcher accepts --profile NAME, --no-firewall, --list-profiles, --wd, and
---id. --no-firewall starts new resources with lifted firewall enforcement. Use
-the profiles command to discover valid local profile images. Other dash
-arguments are passed to Codex. Relative container copy paths resolve under the
-app container's workspace path. Local copy paths are resolved to absolute host
-paths before calling podman cp.
+Launcher options: -i/--id ID, -d/--wd DIR, -p/--profile NAME,
+--no-firewall, --list-profiles, and -h/--help. Options may follow a command,
+e.g. respawn -i 4. Shell payloads begin at the executable; copy payloads begin
+at the first path. Use -- before Codex arguments; they pass through unchanged.
+Unknown launcher options are errors. --no-firewall requests lifted startup.
+
+status, name, respawn, rm, destroy, and kill accept numeric ID lists/ranges,
+e.g. -i 3-6,9. All IDs are checked first, then processed in numeric order.
+Other commands require one instance. --id and --wd cannot be combined.
+
+rm all requires exactly one scope:
+  --workspace   Exact inferred workspace root, across profiles.
+  --ancestors   Inferred root and registered ancestor workspaces.
+  --tree        Inferred root and registered descendants.
+  --everywhere  Every registered instance for this user (no --wd).
+Use -d DIR to change path inference. Explicit -p filters bulk removal; default
+or environment profile selection does not. Bulk removal cannot take IDs.
+Removal uses existing pod/container cleanup and retains mounted workspace data
+and registry records. It does not sweep unregistered Podman resources.
+
+Relative container copy paths resolve under the app workspace. Host copy paths
+are made absolute before podman cp. Use profiles to list local profile images.
 EOF
 }
 
@@ -927,7 +1103,11 @@ sidecar_var_value() {
 
 sidecar_container_name() {
   local sidecar_id="$1"
-  printf '%s-sidecar-%s\n' "${POD_NAME}" "${sidecar_id}"
+  local saved_name=""
+  if [[ -n "${SELECTOR_STATE_DIR:-}" ]]; then
+    saved_name="$(read_state_file "$SELECTOR_STATE_DIR" "sidecar_${sidecar_id}")"
+  fi
+  printf '%s\n' "${saved_name:-${POD_NAME}-sidecar-${sidecar_id}}"
 }
 
 validate_sidecars() {
@@ -965,78 +1145,6 @@ validate_sidecars() {
   done
 }
 
-parse_args() {
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --wd)
-        if [ -z "${2:-}" ]; then
-          echo "Error: --wd flag provided but no directory specified." >&2
-          exit 1
-        fi
-        WORK_DIR="$2"
-        WORK_DIR_SELECTED=1
-        shift 2
-        ;;
-      --id)
-        if [ -z "${2:-}" ]; then
-          echo "Error: --id flag provided but no identifier specified." >&2
-          exit 1
-        fi
-        SELECTOR_ID="$2"
-        shift 2
-        ;;
-      --profile)
-        if [ -z "${2:-}" ]; then
-          echo "Error: --profile flag provided but no profile specified." >&2
-          exit 1
-        fi
-        CODEX_CONTAINER_PROFILE="$2"
-        shift 2
-        ;;
-      --no-firewall)
-        CLI_NO_FIREWALL=1
-        CODEX_FIREWALL_MODE=lifted
-        shift
-        ;;
-      --list-profiles)
-        ACTION="profiles"
-        shift
-        if [ "$#" -ne 0 ]; then
-          echo "Error: --list-profiles does not accept arguments." >&2
-          exit 1
-        fi
-        return
-        ;;
-      --work_dir)
-        echo "Error: --work_dir has been replaced by --wd." >&2
-        exit 1
-        ;;
-      --)
-        shift
-        START_ARGS=("$@")
-        return
-        ;;
-      -*)
-        START_ARGS=("$@")
-        return
-        ;;
-      *)
-        case "$1" in
-          help|profiles|list|status|name|spawn|enter|shell|rootenter|rootshell|fwenter|fwshell|replace|respawn|destroy|rm|kill|copy|push|pull|fetch)
-            ACTION="$1"
-            shift
-            ACTION_ARGS=("$@")
-            ;;
-          *)
-            START_ARGS=("$@")
-            ;;
-        esac
-        return
-        ;;
-    esac
-  done
-}
-
 apply_trailing_selector() {
   case "${ACTION}" in
     status|name|spawn|respawn|destroy|rm|kill)
@@ -1059,6 +1167,32 @@ apply_trailing_selector() {
   echo "Error: ${ACTION} accepts at most one trailing workspace id, and only without --id or --wd." >&2
   usage >&2
   exit 1
+}
+
+validate_cli_request() {
+  if [[ -n "$SELECTOR_ID" && "$WORK_DIR_SELECTED" = 1 ]]; then
+    cli_error '--id and --wd cannot be combined.'
+  fi
+  if [[ "$BULK_REMOVE" = 1 ]]; then
+    [[ -n "$BULK_SCOPE" ]] || cli_error 'rm all requires one of --workspace, --ancestors, --tree, or --everywhere.'
+    [[ -z "$SELECTOR_ID" && ${#ACTION_ARGS[@]} = 0 ]] || cli_error 'rm all cannot be combined with instance IDs.'
+    [[ "$BULK_SCOPE" != --everywhere || "$WORK_DIR_SELECTED" = 0 ]] || cli_error '--everywhere cannot be combined with --wd.'
+  fi
+  case "$ACTION" in
+    help|list|profiles|start|replace)
+      (( ${#ACTION_ARGS[@]} == 0 )) || cli_error "$ACTION does not accept operands." ;;
+    shell|rootshell|fwshell)
+      (( ${#ACTION_ARGS[@]} > 0 )) || cli_error "$ACTION requires a command." ;;
+    copy|push|pull|fetch)
+      (( ${#ACTION_ARGS[@]} == 2 )) || cli_error "$ACTION requires two path operands." ;;
+  esac
+  # Commas always denote numeric selection; a digit-led range is numeric too.
+  if [[ "$SELECTOR_ID" = *,* || "$SELECTOR_ID" =~ ^[0-9]+- ]]; then
+    case "$ACTION" in
+      status|name|respawn|rm|destroy|kill) ;;
+      *) cli_error "$ACTION requires a single instance ID." ;;
+    esac
+  fi
 }
 
 load_selected_workspace_env_if_needed() {
@@ -1313,6 +1447,91 @@ resolve_target_state() {
   shopt -u nullglob
 
   return 1
+}
+
+# Resolve the complete selection before dispatching any operation. Each child
+# starts from the original caller environment and loads its own workspace env.
+dispatch_multiple_targets() {
+  local entry id item first last number root path profile child_status=0
+  local -a selected_ids=() selected_states=() items=() child_options=()
+  local numeric_selection=0
+  if [[ "$SELECTOR_ID" = *,* || "$SELECTOR_ID" =~ ^[0-9]+- ]]; then
+    numeric_selection=1
+  fi
+  [[ "$BULK_REMOVE" = 1 || "$numeric_selection" = 1 ]] || return 0
+
+  if [[ "$BULK_REMOVE" = 1 ]]; then
+    root="$(resolve_workspace_root "$WORK_DIR")"
+    if [[ -d "${REGISTRY_ROOT}/by-seq" ]]; then
+      while IFS= read -r id; do
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        entry="$(readlink -f "${REGISTRY_ROOT}/by-seq/${id}")" || continue
+        [[ -d "$entry" ]] || continue
+        path="$(read_state_file "$entry" path)"
+        [[ -n "$path" ]] || continue
+        path="$(realpath -m "$path")"
+        profile="$(read_state_file "$entry" profile)"
+        if [[ -n "$CLI_CODEX_CONTAINER_PROFILE" && "${profile:-default}" != "$CLI_CODEX_CONTAINER_PROFILE" ]]; then
+          continue
+        fi
+        case "$BULK_SCOPE" in
+          --workspace)
+            if [[ "$path" != "$root" ]]; then
+              if [[ "$path" = "${root%/}/"* ]]; then
+                printf 'Warning: descendant workspace left untouched: %s (id %s). Use rm all --tree to include descendants.\n' "$path" "$id" >&2
+              fi
+              continue
+            fi ;;
+          --ancestors) [[ "$path" = "$root" || "$root" = "${path%/}/"* ]] || continue ;;
+          --tree) [[ "$path" = "$root" || "$path" = "${root%/}/"* ]] || continue ;;
+        esac
+        selected_ids+=("$id")
+        selected_states+=("$entry")
+      done < <(find "${REGISTRY_ROOT}/by-seq" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -n)
+    fi
+  else
+    [[ "$SELECTOR_ID" != ,* && "$SELECTOR_ID" != *, && "$SELECTOR_ID" != *,,* ]] || cli_error "Invalid ID selection: $SELECTOR_ID"
+    IFS=, read -r -a items <<< "$SELECTOR_ID"
+    for item in "${items[@]}"; do
+      [[ "$item" =~ ^([0-9]+)(-([0-9]+))?$ ]] || cli_error "Invalid ID selection: $item"
+      first="${BASH_REMATCH[1]}"
+      last="${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}"
+      # Registry IDs are positive decimal integers; bound arithmetic to avoid overflow.
+      [[ ${#first} -le 9 && ${#last} -le 9 ]] || cli_error "Invalid ID range: $item"
+      first=$((10#$first)); last=$((10#$last))
+      (( first > 0 && last >= first )) || cli_error "Invalid ID range: $item"
+      for ((number=first; number<=last; number++)); do
+        [[ -L "${REGISTRY_ROOT}/by-seq/${number}" && -d "${REGISTRY_ROOT}/by-seq/${number}" ]] || cli_error "Unknown workspace id: $number"
+        selected_ids+=("$number")
+      done
+    done
+    mapfile -t selected_ids < <(printf '%s\n' "${selected_ids[@]}" | sort -nu)
+    for id in "${selected_ids[@]}"; do
+      selected_states+=("$(readlink -f "${REGISTRY_ROOT}/by-seq/${id}")")
+    done
+  fi
+
+  if (( ${#selected_ids[@]} == 0 )); then
+    printf 'No registered instances match the removal scope.\n'
+    exit 0
+  fi
+  for ((number=0; number<${#selected_ids[@]}; number++)); do
+    entry="${selected_states[number]}"
+    printf 'Selected id %s: %s (profile %s)\n' "${selected_ids[number]}" \
+      "$(read_state_file "$entry" path)" "$(read_state_file "$entry" profile)"
+  done
+  [[ "$CLI_NO_FIREWALL" != 1 ]] || child_options+=(--no-firewall)
+  for id in "${selected_ids[@]}"; do
+    printf '== id %s: %s ==\n' "$id" "$ACTION"
+    entry="$(readlink -f "${REGISTRY_ROOT}/by-seq/${id}")"
+    path="$(read_state_file "$entry" path)"
+    if ! WORKSPACE_ROOT_DIR="$path" CODEX_CONTAINER_BATCH_VERIFY_REMOVAL=1 \
+      bash "$0" "${child_options[@]}" --id "$id" "$ACTION"; then
+      printf 'Error: %s failed for id %s.\n' "$ACTION" "$id" >&2
+      child_status=1
+    fi
+  done
+  exit "$child_status"
 }
 
 workspace_state() {
@@ -2136,8 +2355,11 @@ start_new_pod() {
   trap - EXIT
 }
 
-parse_args "$@"
 apply_trailing_selector
+validate_cli_request
+if [[ "$CLI_NO_FIREWALL" = 1 ]]; then
+  CODEX_FIREWALL_MODE=lifted
+fi
 
 validate_profile_name "${CODEX_CONTAINER_PROFILE}"
 
@@ -2165,6 +2387,7 @@ if [ "${ACTION}" = "profiles" ]; then
 fi
 
 snapshot_reexec_if_needed "$@"
+dispatch_multiple_targets
 
 if [ "${ACTION}" = "list" ]; then
   list_workspaces
@@ -2302,6 +2525,18 @@ if [ -z "${SELECTOR_ID}" ]; then
 fi
 
 if [ -n "${SELECTOR_STATE_DIR}" ]; then
+  # Registered instances may predate the current naming defaults.
+  for resource_var in POD_NAME CONTAINER_NAME FW_NAME PROXY_NAME; do
+    case "$resource_var" in
+      POD_NAME) resource_key=pod ;;
+      CONTAINER_NAME) resource_key=app ;;
+      FW_NAME) resource_key=fw ;;
+      PROXY_NAME) resource_key=proxy ;;
+    esac
+    saved_resource="$(read_state_file "$SELECTOR_STATE_DIR" "$resource_key")"
+    [[ -z "$saved_resource" ]] || printf -v "$resource_var" '%s' "$saved_resource"
+  done
+  INFRA_NAME="${POD_NAME}-infra"
   state_sidecars="$(read_state_file "${SELECTOR_STATE_DIR}" sidecars)"
   IFS=: read -r -a CLEANUP_SIDECAR_IDS_ARRAY <<< "${state_sidecars}"
 fi
@@ -2378,6 +2613,10 @@ case "${ACTION}" in
   destroy|rm)
     if resource_exists; then
       cleanup_resources graceful
+      if [[ "${CODEX_CONTAINER_BATCH_VERIFY_REMOVAL:-0}" = 1 ]] && resource_exists; then
+        echo "Error: resources remain for ${POD_NAME}." >&2
+        exit 1
+      fi
       echo "removed ${POD_NAME}"
     else
       echo "nothing to remove for ${POD_NAME}"
@@ -2387,6 +2626,10 @@ case "${ACTION}" in
   kill)
     if resource_exists; then
       cleanup_resources immediate
+      if [[ "${CODEX_CONTAINER_BATCH_VERIFY_REMOVAL:-0}" = 1 ]] && resource_exists; then
+        echo "Error: resources remain for ${POD_NAME}." >&2
+        exit 1
+      fi
       echo "killed ${POD_NAME}"
     else
       echo "nothing to kill for ${POD_NAME}"
@@ -2408,7 +2651,6 @@ case "${ACTION}" in
     else
       echo "nothing to replace for ${POD_NAME}; starting new pod"
     fi
-    START_ARGS=("${ACTION_ARGS[@]}")
     ;;
   respawn)
     if resource_exists; then

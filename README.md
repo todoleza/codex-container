@@ -119,6 +119,28 @@ lifted startup and continues without the firewall container if it is broken.
 
 More details on use are in [howto-use-with-podman.md](./howto-use-with-podman.md).
 
+## Launcher CLI and completion
+
+The launcher owns options before `--`; Codex arguments follow it:
+
+```bash
+./run-in-container.sh -d /path/to/project -p infra -- resume --last
+./run-in-container.sh respawn -i 3-6,9
+./run-in-container.sh rm all --workspace
+./run-in-container.sh rm all --tree -p infra
+```
+
+`-i/--id`, `-d/--wd`, and `-p/--profile` can follow launcher commands.
+`--help` shows launcher help; `-- --help` requests Codex help. Implicit Codex
+argument forwarding has been removed. Bulk removal requires an explicit
+`--workspace`, `--ancestors`, `--tree`, or `--everywhere` scope; mounted workspace
+data and registry records remain.
+
+Install the script under your preferred command name, including `codex`, and
+run `<command> completion bash|zsh` to generate completion for that invocation
+name. See [CLI selection and completion setup](howto-use-with-podman.md#shell-completion)
+for loading instructions, ID lists, and removal scopes.
+
 ## Entry points
 
 - `codex-artifact.sh`

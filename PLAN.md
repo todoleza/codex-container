@@ -192,6 +192,26 @@ snapshot under `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container` so edits
 to the source script after invocation do not affect that active command.
 Short read-only commands (`help`, `list`, `name`, `status`) do not snapshot.
 
+### Launcher CLI and instance selection
+
+Implemented: launcher arguments own the command line before the first `--`;
+Codex arguments require that separator, including for `replace`. Launcher
+`--help` is local help. `-i/--id`, `-d/--wd`, and `-p/--profile` may follow
+commands, stopping at shell/copy payloads. Early workspace/profile selection
+uses the same parser.
+
+`status`, `name`, `respawn`, and removal commands accept checked numeric ID
+lists/ranges. Multi-target operations resolve all IDs first, then dispatch
+isolated per-instance invocations and aggregate failures. `spawn` remains
+single-target. `rm all` requires `--workspace`, `--ancestors`, `--tree`, or
+`--everywhere`; explicit CLI profiles filter selection, default/env profiles do
+not. Selection is registry-based and retains existing cleanup/data boundaries.
+
+Bash/Zsh generators infer the invoked command name, including `codex`, and
+run independently of workspace env files and Podman. Completion after the
+Codex separator, dynamic profile/ID suggestions, and native-completer
+adapters are deferred. Native Codex completion is documented separately.
+
 ### Distribution shapes
 
 Two user-facing entrypoints are prepared:

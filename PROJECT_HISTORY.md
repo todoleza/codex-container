@@ -1,5 +1,44 @@
 # Project History
 
+## 2026-11-11 - Make launcher arguments explicit and add completion and bulk selection
+
+### Changed and decisions
+- Kept the self-contained Bash launcher. Codex arguments now require `--`,
+  including with `replace`; launcher `-h`/`--help` shows local help. Added
+  `-i/--id`, `-d/--wd`, and `-p/--profile`, accepted after commands before
+  shell/copy payloads. Early workspace/profile discovery uses the same parser.
+- Added `completion bash|zsh`, inferring the command name from `$0`, including
+  the user's `codex` symlink. Generation bypasses env files, Podman, snapshots,
+  and network access. Native Codex completion remains separately documented;
+  payload delegation and dynamic profile/ID suggestions are deferred.
+- Added checked numeric ID lists/ranges for status, name, respawn, and removal.
+  Spawn remains single-target. Requests resolve all IDs before dispatch,
+  process targets in numeric order, and aggregate operational failures.
+- Added explicit `rm all` scopes: `--workspace`, `--ancestors`, `--tree`, and
+  `--everywhere`. Path scopes include the inferred root; explicit CLI profiles
+  filter selection, environment/default profiles do not. Exact-root removal
+  warns about descendants left outside its scope. Selection is restricted to
+  this user's registry, retaining mounted workspace files and registry records.
+- Per-target invocations start workspace inference at the saved target path and
+  use saved resource/sidecar names. A new isolation test caught invocation-root
+  env settings leaking into a second target; target-root initialization fixes
+  that failure. Batch removals verify resources are gone and report failures.
+- Updated README, usage notes, and the living plan for the breaking argument
+  boundary and new selection/completion interfaces.
+
+### Validation and follow-up
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-launcher-cli.py`: 14 tests
+  passed, covering exact argument arrays, short options, shell/copy boundaries,
+  list/range preflight, multi-target configuration isolation, every removal
+  scope, profile filters, failure aggregation, and Bash/Zsh completion.
+- All five existing `scripts/test-launcher-*.sh` regression scripts passed.
+- Bash launcher/generated-completion syntax, Zsh generated-completion syntax,
+  generated Bash completion ShellCheck, and `git diff --check` passed.
+  Launcher ShellCheck retains the same pre-existing diagnostics as HEAD;
+  no new diagnostic was introduced.
+- Podman is unavailable in this session. Container lifecycle/removal validation
+  used stateful mocks; live workstation Podman behavior remains unverified.
+
 ## 2026-11-09 - Allow GitHub raw content in the source-control category
 
 ### Changed and evidence

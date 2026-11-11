@@ -117,7 +117,7 @@ This produces:
 Run Codex through the primary pod launcher:
 
 ```bash
-./run-in-container.sh --wd /path/to/repo --full-auto
+./run-in-container.sh -d /path/to/repo -- --full-auto
 ```
 
 If you run it without a command, it starts Codex:
@@ -129,8 +129,43 @@ If you run it without a command, it starts Codex:
 eventually set up a symlink:
 
 ```bash
-ln -sr ./run-in-container.sh ~/bin/codex.sh
+ln -sr ./run-in-container.sh ~/bin/codex
 ```
+
+### Shell completion
+
+The generator uses the invocation basename (`$0`), so generating through the
+`codex` symlink registers completion for `codex`. Generate again after launcher
+updates. Generation does not load env files, contact the network, require
+Podman, or create runtime snapshots.
+
+Bash setup (after creating a directory for the generated file):
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+codex completion bash > ~/.local/share/bash-completion/completions/codex
+source ~/.local/share/bash-completion/completions/codex
+```
+
+Zsh setup, adding the source line after your existing `compinit` in `.zshrc`:
+
+```zsh
+mkdir -p ~/.local/share/zsh
+codex completion zsh > ~/.local/share/zsh/codex-completion.zsh
+# Initialize once if your shell configuration does not already do so:
+autoload -Uz compinit && compinit
+source ~/.local/share/zsh/codex-completion.zsh
+```
+
+Completion covers launcher commands/options, removal scopes, directory values,
+and copy-path operands. It stops at Codex or shell-command payloads. Dynamic
+profile/ID suggestions and delegation after `--` are deferred.
+
+The native Codex CLI also has `codex completion bash|zsh` generators
+([official documentation](https://learn.chatgpt.com/docs/cli-customization)).
+Those can be used separately in container shells, where `codex` is the native
+CLI wrapper. On the workstation, keep the launcher completion registered for
+`codex`; sourcing native completion for that same name would replace it.
 
 The direct launcher creates a pod with stable human-readable names:
 
@@ -173,16 +208,24 @@ The image also installs a shell profile hook that changes interactive shells int
 the propagated workspace path, so Codex sees the same absolute path inside the
 container that the host-side session index records.
 
-The launcher parses `--wd` and `--id` as its own dash options. Other dash
-arguments are passed to Codex, so `--help` still means Codex CLI help. Use the
-non-dash `help` command for launcher help:
+The launcher owns arguments before the first `--`; Codex arguments go after
+it unchanged. `-h`, `--help`, and `help` show launcher help. Unknown launcher
+options and commands are errors:
 
 ```bash
-./run-in-container.sh help
-./run-in-container.sh --help
+codex --help
+codex -- --help
+codex -d /path/to/repo -p infra -- resume --last
 ```
 
-Launcher commands are selected by the first recognized non-dash argument:
+Launcher options have short forms: `-d/--wd`, `-i/--id`, and `-p/--profile`.
+They may appear before or after the launcher command, for example
+`codex respawn -i 4` or `codex replace -i 4 -- --model MODEL`.
+Shell command arguments begin at the executable: `codex shell -i 4 bash -lc
+'printf hello'`. Copy arguments begin at the first path. An optional `--` can
+also mark shell/copy payloads. `--id` and `--wd` cannot be combined.
+
+Launcher commands include:
 
 ```bash
 ./run-in-container.sh list
@@ -197,7 +240,7 @@ Launcher commands are selected by the first recognized non-dash argument:
 ./run-in-container.sh --id parent-leaf fwshell firewall-list
 ./run-in-container.sh --id 1 copy ./local.txt notes/local.txt
 ./run-in-container.sh --id parent-leaf pull notes/out.txt ./out.txt
-./run-in-container.sh --id 1 replace --model gpt-5
+./run-in-container.sh replace -i 1 -- --model MODEL
 ./run-in-container.sh --id 1 respawn
 ./run-in-container.sh rm parent-leaf
 ```
@@ -222,6 +265,39 @@ number, by its `parent-leaf` alias, by a known container/pod name, or by an
 absolute path. If an alias matches more than one workspace, use the numeric id.
 For launcher-owned commands that do not otherwise accept payload arguments,
 the id can also come after the command, as in `status 1` or `rm parent-leaf`.
+`status`, `name`, `respawn`, `rm`, `destroy`, and `kill` accept numeric ID
+lists and inclusive ranges, such as `codex respawn -i 3-6,9`. IDs are checked
+before any operation, deduplicated, and processed in numeric order. Output is
+labelled per instance; after preflight, failures do not prevent attempts on
+remaining instances, and any failure produces a nonzero exit status. Other
+commands, including `spawn`, take one target.
+
+Bulk removal requires an explicit scope:
+
+```bash
+codex rm all --workspace                 # Exact inferred root, every profile
+codex rm all --workspace -d /path/to/repo # Override workspace inference
+codex rm all --ancestors                 # Root and registered ancestors
+codex rm all --tree                      # Root and registered descendants
+codex rm all --everywhere                # Every instance in this user's registry
+codex rm all --tree -p infra             # Only the explicitly selected profile
+codex rm -i 3-6,9                        # Explicit IDs instead of a path scope
+```
+
+`rm all` alone is an error. Choose exactly one scope and do not combine it
+with IDs. `--everywhere` cannot take `--wd`. Workspace scope uses the existing
+Git/env-file root inference; path comparisons respect directory boundaries.
+An explicit `-p` filters bulk removal; environment/default profiles do not.
+`--workspace` warns about registered descendants left untouched and suggests
+`--tree`. The selected IDs, paths, and profiles are printed before removal.
+An empty selection succeeds.
+
+Removal uses existing graceful pod/container cleanup, including recorded
+sidecars and runtime policy/proxy files. Writable container-layer data is lost;
+mounted workspace files and registry records remain. `kill` retains immediate
+cleanup. Bulk removal only selects this user's registered instances, including
+stopped ones; it does not sweep unregistered or unrelated Podman resources.
+
 The registry lives under
 `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/codex-container/workspaces` and is made
 from symlinks into per-workspace state directories.
@@ -512,7 +588,7 @@ CONTAINER_EXEC_COMMAND="bash"
 or for a one-off test:
 
 ```bash
-PODMAN_EXEC_ARGS="--privileged" CONTAINER_EXEC_COMMAND="bash -lc 'env | sort'" ./run-in-container.sh ''
+PODMAN_EXEC_ARGS="--privileged" CONTAINER_EXEC_COMMAND="bash -lc 'env | sort'" ./run-in-container.sh -- ''
 ```
 
 The launcher also pauses briefly after printing its startup summary. To change or disable that:
