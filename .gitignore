@@ -3,3 +3,4 @@
 openai-codex-*.tgz
 codex-npm-*.tgz
 /dist
+__pycache__
