@@ -1,5 +1,4 @@
-ARG FEDORA_VERSION=latest
-FROM fedora:${FEDORA_VERSION} AS codex-common
+# DISTRO_BASE
 
 ARG TZ
 ENV TZ="${TZ}"
@@ -7,7 +6,7 @@ ENV TZ="${TZ}"
 ARG USERNAME=node
 ARG SOPS_VERSION=latest
 
-RUN dnf -y --refresh makecache
+# DISTRO_INITIALIZE
 
 # COMMON_DEPENDENCY_DROPINS
 
@@ -28,7 +27,7 @@ RUN case "$(uname -m)" in \
 
 COPY container-runtime/codex container-runtime/codex-firewall-policy container-runtime/init container-runtime/profile.sh /tmp/codex-container-runtime/
 
-RUN useradd --create-home "${USERNAME}" \
+RUN @CREATE_RUNTIME_USER@ \
   && install -d -o "${USERNAME}" -g "${USERNAME}" /usr/local/share/npm-global \
   && install -d /usr/local/share/codex-container \
   && install -m 755 /tmp/codex-container-runtime/codex /usr/local/bin/codex \
@@ -63,6 +62,7 @@ ARG CODEX_PACKAGE_VERSION
 
 RUN printf 'Installing Codex CLI %s\n' "${CODEX_PACKAGE_VERSION}" \
   && npm install -g /tmp/codex.tgz \
+  && codex --version \
   && npm cache clean --force \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \

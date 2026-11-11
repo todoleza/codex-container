@@ -1,0 +1,13 @@
+py3-requests
+py3-setuptools
+py3-dateutil
+exiftool
+rsync
+tmux
+diffutils
+py3-pip
+parallel
+binutils
+mandoc
+file
+which

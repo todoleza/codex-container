@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 BASE_PROFILE = "default"
 PROFILE_RELATIONSHIPS = (("python", "media"), ("python", "full"), ("media", "full"), ("infra", "full"))
-KINDS = {"dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr", {".copr"}),
+KINDS = {"apk": ("container-deps/apk", {".apk"}), "dnf": ("container-deps/dnf", {".dnf"}), "copr": ("container-deps/copr", {".copr"}),
          "repos": ("container-deps/repos", {".repo"}), "collections": ("container-deps/collections", {".yml", ".yaml"}),
          "containerfiles": ("container-deps/containerfiles", {".containerfile"})}
 COPR_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.:+-]+)?$")
@@ -25,12 +25,21 @@ def fedora_settings(environment: dict[str, str], root: Path = ROOT) -> tuple[str
     cache = Path(environment.get("DNF_CACHE_DIR", root / f".build-cache/dnf-fedora-{version}")).resolve()
     return version, cache
 
+def alpine_settings(environment: dict[str, str], root: Path = ROOT) -> tuple[str, Path]:
+    version = environment.get("ALPINE_VERSION") or "latest"
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
+        fail(f"invalid ALPINE_VERSION image tag: {version!r}")
+    cache = Path(environment.get("APK_CACHE_DIR") or root / f".build-cache/apk-alpine-{version}").resolve()
+    return version, cache
+
 class BuildError(RuntimeError): pass
 
 @dataclass(frozen=True)
 class Profile:
     name: str
     members: dict[str, tuple[Path, ...]]
+    distro: str = "fedora"
+    base_profile: str = "default"
 
 def fail(message: str): raise BuildError(message)
 def content_lines(path: Path) -> list[str]:
@@ -55,6 +64,17 @@ def discover_profiles(root: Path = ROOT) -> tuple[str, ...]:
     return (BASE_PROFILE, *sorted(found - {BASE_PROFILE}))
 
 def read_profile(name: str, root: Path = ROOT) -> Profile:
+    metadata_file = root / "container-profiles" / name / "profile.json"
+    metadata = {}
+    if metadata_file.exists():
+        try: metadata = json.loads(metadata_file.read_text())
+        except (ValueError, OSError) as exc: fail(f"invalid profile metadata for {name}: {exc}")
+        if not isinstance(metadata, dict) or set(metadata) - {"distro", "base_profile"}:
+            fail(f"unsupported profile metadata for {name}")
+    distro = metadata.get("distro", "fedora")
+    parent = metadata.get("base_profile", "default")
+    if not isinstance(distro, str) or distro not in {"fedora", "alpine"}: fail(f"unsupported profile distro: {distro}")
+    if not isinstance(parent, str) or not PROFILE_RE.fullmatch(parent): fail(f"invalid base profile: {parent}")
     members, package_owner = {}, {}
     for kind, (catalog_name, extensions) in KINDS.items():
         catalog = (root / catalog_name).resolve(); directory = root / "container-profiles" / name / kind; selected = []
@@ -73,14 +93,17 @@ def read_profile(name: str, root: Path = ROOT) -> Profile:
                 if target.suffix not in extensions: fail(f"profile target has invalid extension: {rel}")
                 selected.append(target)
         if len(selected) != len(set(selected)): fail(f"profile {name} contains duplicate {kind} membership")
-        if kind == "dnf":
+        if kind in {"dnf", "apk"}:
             for source in selected:
                 for package in parse_dnf(source):
                     if package in package_owner: fail(f"profile {name} declares package {package} in both {package_owner[package].relative_to(root)} and {source.relative_to(root)}")
                     package_owner[package] = source
         members[kind] = tuple(selected)
-    if not members["dnf"]: fail(f"profile {name} selects no DNF components")
-    return Profile(name, members)
+    packages = "apk" if distro == "alpine" else "dnf"
+    if not members[packages]: fail(f"profile {name} selects no {packages.upper()} components")
+    forbidden = ("dnf", "copr", "repos") if distro == "alpine" else ("apk",)
+    if any(members[kind] for kind in forbidden): fail(f"profile {name} contains components incompatible with {distro}")
+    return Profile(name, members, distro, parent)
 
 def requirements(profile: Profile, root: Path) -> str | None:
     if not profile.members["collections"]: return None
@@ -101,12 +124,17 @@ def validate_profile_relationships(profiles: dict[str, Profile]) -> None:
 
     if BASE_PROFILE not in profiles:
         fail(f"missing base profile: {BASE_PROFILE}")
-    for name in profiles:
-        if name != BASE_PROFILE:
-            require_subset(BASE_PROFILE, name)
+    for name, profile in profiles.items():
+        parent = profile.base_profile
+        if parent not in profiles: fail(f"profile {name} has missing base profile {parent}")
+        if profiles[parent].distro != profile.distro: fail(f"profile {name} cannot inherit across distros")
+        if profiles[parent].base_profile != parent: fail(f"base profile {parent} must be self-based")
+        if name != parent:
+            require_subset(parent, name)
     for parent, child in PROFILE_RELATIONSHIPS:
         if parent in profiles and child in profiles:
-            require_subset(parent, child)
+            if profiles[parent].distro == profiles[child].distro:
+                require_subset(parent, child)
 
 def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[str]:
     steps: list[str] = []
@@ -123,15 +151,21 @@ def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[s
         rel = source.relative_to(root)
         steps += [f"# {rel}", f"RUN printf 'Installing DNF component: {rel}\\n' \\", f"  && dnf -y install {DNF_INSTALL_OPTIONS} \\"]
         steps += [f"    {package} \\" for package in parse_dnf(source)] + ["  && true", ""]
+    for source in members["apk"]:
+        rel = source.relative_to(root)
+        steps += [f"# {rel}", "RUN apk --cache-dir /var/cache/apk add --update-cache \\"]
+        steps += [f"    {package} \\" for package in parse_dnf(source)] + ["  && true", ""]
     for source in members["containerfiles"]:
         rel = source.relative_to(root)
         steps += [f"# {rel}", source.read_text().rstrip(), ""]
     return steps
 
 def render(profile: Profile, template: str, root: Path = ROOT, common: Profile | None = None) -> tuple[str, str | None]:
-    for marker in ("# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
+    for marker in ("# DISTRO_BASE", "# DISTRO_INITIALIZE", "@CREATE_RUNTIME_USER@", "# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
         if template.count(marker) != 1: fail(f"Dockerfile.in must contain exactly one {marker} marker")
-    common = common or read_profile(BASE_PROFILE, root)
+    common = common or read_profile(profile.base_profile, root)
+    if common.name != profile.base_profile or common.distro != profile.distro:
+        fail(f"wrong common profile for {profile.name}")
     common_sources = {kind: set(common.members[kind]) for kind in KINDS}
     head = ["# Generated file; retained as build evidence.", f"# Profile: {profile.name}"]
     for kind in KINDS:
@@ -151,6 +185,16 @@ def render(profile: Profile, template: str, root: Path = ROOT, common: Profile |
     collection = ""
     if req: collection = "\n".join([f"COPY .build-cache/profiles/{profile.name}/ansible-collections.yml /tmp/codex-ansible-collections.yml",
         "RUN ansible-galaxy collection install --force -p /usr/share/ansible/collections -r /tmp/codex-ansible-collections.yml \\", "  && rm -f /tmp/codex-ansible-collections.yml"])
+    if profile.distro == "alpine":
+        base = "ARG ALPINE_VERSION=latest\nFROM alpine:${ALPINE_VERSION} AS codex-common"
+        initialize = "RUN mkdir -p /var/cache/apk && ln -s /var/cache/apk /etc/apk/cache"
+        user_command = 'adduser -D -s /bin/bash "${USERNAME}"'
+    else:
+        base = "ARG FEDORA_VERSION=latest\nFROM fedora:${FEDORA_VERSION} AS codex-common"
+        initialize = "RUN dnf -y --refresh makecache"
+        user_command = 'useradd --create-home "${USERNAME}"'
+    template = template.replace("# DISTRO_BASE", base).replace("# DISTRO_INITIALIZE", initialize)
+    template = template.replace("@CREATE_RUNTIME_USER@", user_command)
     body = template.replace("# COMMON_DEPENDENCY_DROPINS", "\n".join(shared_steps).rstrip())
     body = body.replace("# PROFILE_DEPENDENCY_DROPINS", "\n".join(profile_steps).rstrip())
     body = body.replace("# ANSIBLE_COLLECTION_DROPINS", collection)
@@ -247,17 +291,29 @@ def build(argv: list[str]) -> int:
     dns = os.environ.get("CODEX_FIREWALL_DNS_TOOL", "dig")
     if dns not in {"dig", "kdig", "drill"}: fail(f"unsupported CODEX_FIREWALL_DNS_TOOL={dns}")
     timezone = detect_host_timezone()
-    fedora_version, cache = fedora_settings(os.environ)
+    settings = {name: (alpine_settings(os.environ) if profiles[name].distro == "alpine"
+                       else fedora_settings(os.environ)) for name in selected}
     version, kind = artifact(ROOT); version = freshness(version, kind, args.batch, ROOT)
-    (cache/"dnf").mkdir(parents=True, exist_ok=True); (cache/"libdnf5").mkdir(parents=True, exist_ok=True); base = [cli, "build" if cli == "podman" else "bud"]
+    base = [cli, "build" if cli == "podman" else "bud"]
     subprocess.run(base + ["--layers", "-t", "codex-firewall", "-f", "./Dockerfile.firewall", "--build-arg", f"CODEX_FIREWALL_DNS_TOOL={dns}", "--label", "org.opencontainers.image.title=codex-container-firewall",
       "--label", "org.opencontainers.image.ref.name=codex-firewall", "--label", f"codex.firewall.dns.tool={dns}", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=firewall", "."], cwd=ROOT, check=True)
     for name in selected:
-        file = generate(profiles[name], common=profiles[BASE_PROFILE]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
-        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--pull=always", "--build-arg", f"FEDORA_VERSION={fedora_version}", "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
-          "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
+        profile = profiles[name]
+        base_version, cache = settings[name]
+        if profile.distro == "alpine":
+            cache.mkdir(parents=True, exist_ok=True)
+            cache_args = ["--volume", f"{cache}:/var/cache/apk:Z,rw"]
+            base_arg = f"ALPINE_VERSION={base_version}"
+        else:
+            (cache/"dnf").mkdir(parents=True, exist_ok=True)
+            (cache/"libdnf5").mkdir(parents=True, exist_ok=True)
+            cache_args = ["--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw"]
+            base_arg = f"FEDORA_VERSION={base_version}"
+        file = generate(profile, common=profiles[profile.base_profile]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
+        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--pull=always", "--build-arg", base_arg, "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
+          "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"codex.container.distro={profile.distro}", "--label", f"codex.container.base={profile.distro}:{base_version}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
-          "--label", f"app.kubernetes.io/version={version}", "--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw", "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro"]
+          "--label", f"app.kubernetes.io/version={version}", *cache_args, "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro"]
         if "ANDROID_ACCEPT_LICENSES" in os.environ:
             cmd += ["--build-arg", f"ANDROID_ACCEPT_LICENSES={os.environ['ANDROID_ACCEPT_LICENSES']}"]
         cmd.append(".")

@@ -8,7 +8,7 @@ m = importlib.util.module_from_spec(spec); sys.modules[spec.name] = m; spec.load
 class ProfilesTest(unittest.TestCase):
     def test_catalog_layout(self):
         self.assertEqual({catalog for catalog, _ in m.KINDS.values()}, {
-            "container-deps/dnf", "container-deps/copr",
+            "container-deps/dnf", "container-deps/apk", "container-deps/copr",
             "container-deps/repos", "container-deps/collections", "container-deps/containerfiles",
         })
         self.assertFalse((ROOT/"container-repos").exists())
@@ -30,7 +30,9 @@ class ProfilesTest(unittest.TestCase):
         profiles = {name: m.read_profile(name) for name in m.discover_profiles()}
         common_stages = []
         for profile in profiles.values():
-            text, _ = m.render(profile, template, common=profiles["default"])
+            if profile.distro != "fedora":
+                continue
+            text, _ = m.render(profile, template, common=profiles[profile.base_profile])
             common_stages.append(text[text.index("ARG FEDORA_VERSION="):text.index("FROM codex-common AS codex-profile")])
             final = text[text.index("FROM codex-common AS codex-profile"):]
             self.assertNotIn("CODEX_PACKAGE_VERSION", common_stages[-1])
@@ -125,6 +127,51 @@ class ProfilesTest(unittest.TestCase):
             for invalid in ("", "../45", "45/../../tmp", "45\nRUN false", "fedora:45"):
                 with self.subTest(version=invalid), self.assertRaises(m.BuildError):
                     m.fedora_settings({"FEDORA_VERSION": invalid}, root)
+    def test_alpine_build_and_parity(self):
+        profile = m.read_profile("alpine")
+        self.assertEqual((profile.distro, profile.base_profile), ("alpine", "alpine"))
+        text, req = m.render(profile, (ROOT/"Dockerfile.in").read_text())
+        self.assertIn("FROM alpine:${ALPINE_VERSION}", text)
+        self.assertNotIn("dnf ", text)
+        self.assertNotIn("fedora:", text)
+        self.assertIn("apk --cache-dir /var/cache/apk add --update-cache", text)
+        self.assertNotIn("--no-cache", text)
+        self.assertIn('adduser -D -s /bin/bash "${USERNAME}"', text)
+        self.assertIn('&& codex --version', text)
+        self.assertIsNone(req)
+        packages = [pkg for source in profile.members["apk"] for pkg in m.parse_dnf(source)]
+        for package in ("bash", "coreutils", "nodejs", "npm", "github-cli", "git", "py3-pip", "age"):
+            self.assertIn(package, packages)
+        self.assertNotIn("aggregate", packages)  # Explicitly documented parity gap.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(m.alpine_settings({}, root), ("latest", root/".build-cache/apk-alpine-latest"))
+            self.assertEqual(m.alpine_settings({"ALPINE_VERSION":"3.24", "APK_CACHE_DIR":directory}, root), ("3.24", root))
+            with self.assertRaises(m.BuildError): m.alpine_settings({"ALPINE_VERSION":"../oops"}, root)
+
+    def test_distro_metadata_and_relationship_guards(self):
+        temp, root = self.fixture()
+        with temp:
+            directory = root/"container-profiles/default"
+            metadata = directory/"profile.json"
+            metadata.write_text('{"distro":"alpine", "base_profile":"default"}')
+            with self.assertRaises(m.BuildError): m.read_profile("default", root)
+            (root/"container-deps/apk").mkdir()
+            (root/"container-deps/apk/base.apk").write_text("bash\n")
+            (directory/"apk").mkdir()
+            (directory/"apk/base.apk").symlink_to("../../../container-deps/apk/base.apk")
+            with self.assertRaisesRegex(m.BuildError, "incompatible"):
+                m.read_profile("default", root)
+            metadata.write_text('{"distro":"unknown"}')
+            with self.assertRaises(m.BuildError): m.read_profile("default", root)
+            metadata.write_text('{"unexpected":true}')
+            with self.assertRaises(m.BuildError): m.read_profile("default", root)
+        default, alpine = m.read_profile("default"), m.read_profile("alpine")
+        with self.assertRaises(m.BuildError):
+            m.validate_profile_relationships({"default":default, "alpine":m.Profile("alpine", alpine.members, "alpine", "default")})
+        with self.assertRaises(m.BuildError):
+            m.render(alpine, (ROOT/"Dockerfile.in").read_text(), common=default)
+
     def fixture(self):
         temp = tempfile.TemporaryDirectory(); root = Path(temp.name)
         for d in ("container-deps/dnf","container-deps/copr","container-deps/repos","container-deps/collections","container-profiles/default/dnf"): (root/d).mkdir(parents=True, exist_ok=True)

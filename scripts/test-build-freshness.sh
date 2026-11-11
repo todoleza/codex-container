@@ -11,10 +11,16 @@ EOF
 cat > "${tmpdir}/bin/buildah" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${BUILDAH_LOG}"
-case "$1" in inspect) exit 1 ;; esac
+case "$1" in
+  inspect) exit 1 ;;
+  bud)
+    if [ "${FAKE_FAIL_RUNTIME:-0}" = 1 ]; then
+      case "$*" in *--target*) exit 23 ;; esac
+    fi ;;
+esac
 EOF
 chmod 755 "${tmpdir}/bin/curl" "${tmpdir}/bin/buildah"
-export PATH="${tmpdir}/bin:${PATH}" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache" TZ="Europe/Prague"
+export ALPINE_VERSION=latest PATH="${tmpdir}/bin:${PATH}" APK_CACHE_DIR="${tmpdir}/apk-cache" CODEX_CURL="${tmpdir}/bin/curl" BUILDAH_LOG="${tmpdir}/buildah.log" DNF_CACHE_DIR="${tmpdir}/dnf-cache" TZ="Europe/Prague"
 (cd "${repo_root}" && env -u ANDROID_ACCEPT_LICENSES -u FEDORA_VERSION ./build-images.sh --batch)
 if grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=' "${BUILDAH_LOG}"; then
   echo 'unset license environment must preserve the Containerfile ARG default' >&2
@@ -36,7 +42,10 @@ grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Contai
 grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=1' "${BUILDAH_LOG}"
 mapfile -t build_profiles < <(find "${repo_root}/container-profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
-test "$(grep -c -- '--pull=always --build-arg FEDORA_VERSION=99' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
+test "$(grep -c -- '--pull=always --build-arg FEDORA_VERSION=99' "${BUILDAH_LOG}")" -eq "$((${#build_profiles[@]} - 1))"
+grep -Fq -- '--build-arg ALPINE_VERSION=latest' "${BUILDAH_LOG}"
+grep -Fq -- "${APK_CACHE_DIR}:/var/cache/apk:Z,rw" "${BUILDAH_LOG}"
+grep -Fq -- '--label codex.container.distro=alpine --label codex.container.base=alpine:latest' "${BUILDAH_LOG}"
 grep -Fq -- "${DNF_CACHE_DIR}/dnf:/var/cache/dnf:Z,rw" "${BUILDAH_LOG}"
 for profile in "${build_profiles[@]}"; do
   grep -Eq "bud --layers --target codex-profile -t codex:candidate-${profile}-" "${BUILDAH_LOG}"
@@ -48,6 +57,26 @@ test "${firewall_line}" -lt "${runtime_line}"
 : > "${BUILDAH_LOG}"
 (cd "${repo_root}" && ANDROID_ACCEPT_LICENSES=0 ./build-images.sh --profile fdroid --batch)
 grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=0' "${BUILDAH_LOG}"
+: > "${BUILDAH_LOG}"
+(cd "${repo_root}" && ALPINE_VERSION=3.24 ./build-images.sh --profile alpine --batch)
+grep -Fq -- '--build-arg ALPINE_VERSION=3.24' "${BUILDAH_LOG}"
+grep -Fq -- '--label codex.container.distro=alpine --label codex.container.base=alpine:3.24' "${BUILDAH_LOG}"
+grep -Eq 'tag codex:candidate-alpine-.* codex:alpine' "${BUILDAH_LOG}"
+if grep -Fq -- '--build-arg FEDORA_VERSION=' "${BUILDAH_LOG}"; then
+  echo 'Alpine build must not receive Fedora settings' >&2; exit 1
+fi
+: > "${BUILDAH_LOG}"
+if (cd "${repo_root}" && ALPINE_VERSION=../invalid ./build-images.sh --profile alpine --batch >"${tmpdir}/invalid.out" 2>"${tmpdir}/invalid.err"); then
+  echo 'invalid Alpine base tag must fail' >&2; exit 1
+fi
+test ! -s "${BUILDAH_LOG}"
+: > "${BUILDAH_LOG}"
+if (cd "${repo_root}" && FAKE_FAIL_RUNTIME=1 ./build-images.sh --profile alpine --batch >"${tmpdir}/failed.out" 2>"${tmpdir}/failed.err"); then
+  echo 'failed runtime build must fail the command' >&2; exit 1
+fi
+if grep -Eq '^tag ' "${BUILDAH_LOG}"; then
+  echo 'failed runtime build must not promote or rotate images' >&2; exit 1
+fi
 cat > "${tmpdir}/bin/curl" <<EOF
 #!/bin/sh
 printf '%s\n' '{"tag_name":"rust-v999.0.0"}'

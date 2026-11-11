@@ -1,0 +1,25 @@
+# Alpine counterpart of the Fedora core; aggregate has no verified stable mapping.
+bash
+ca-certificates
+curl
+bind-tools
+fzf
+github-cli
+git
+gnupg
+iproute2
+jq
+less
+procps
+unzip
+ripgrep
+zsh
+python3
+yamllint
+shellcheck
+bubblewrap
+nodejs
+npm
+coreutils
+findutils
+tzdata
