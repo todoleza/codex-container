@@ -7,6 +7,7 @@ APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
 DANGEROUS_BYPASS="${CODEX_DANGEROUS_BYPASS:-0}"
 EXTRA_ADD_DIRS="${CODEX_EXTRA_ADD_DIRS:-}"
 NO_DAEMON="${CODEX_NO_DAEMON:-1}"
+NO_ALT_SCREEN="${CODEX_NO_ALT_SCREEN:-1}"
 
 has_arg() {
   local wanted="$1"
@@ -27,6 +28,9 @@ if [ ! -x "${REAL_CODEX_BIN}" ]; then
 fi
 
 default_flags=()
+if [ "${NO_ALT_SCREEN}" = "1" ] && ! has_arg "--no-alt-screen" "$@"; then
+  default_flags+=(--no-alt-screen)
+fi
 if [ "${NO_DAEMON}" = "1" ] && ! has_arg "--no-daemon" "$@"; then
   default_flags+=(--no-daemon)
 fi

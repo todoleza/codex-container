@@ -73,7 +73,7 @@ reruns DNF metadata refresh before package installation. The explicit
 release-specific caches are preserved.
 
 Profiles with the same distro/base membership share an internal `codex-common` stage with
-the default packages, SOPS, runtime files, and user setup. Profile-specific
+the default packages, runtime files, and user setup. Profile-specific
 dependencies are added from that stage, and Codex is installed last. Updating
 only `dist/codex.tgz` should therefore rebuild the final Codex layer for each
 selected profile without rebuilding DNF or collection layers. The internal
@@ -89,9 +89,10 @@ install`. Each file should contain Ansible collection requirement list entries:
   version: main
 ```
 
-The runtime image includes `age` from distro packages and the latest stable
-SOPS release binary by default. Pin SOPS with
-`SOPS_VERSION=<version> ./build-images.sh`.
+Only `infra` and `full` include `age` and SOPS. Pin SOPS with
+`SOPS_VERSION=<version> ./build-images.sh -p infra`. Other profiles, including
+Alpine, omit both tools. Builder aliases are `-p/--profile`, `-a/--all`,
+`-x/--no-profile`, and `-b/--batch`; existing long options remain supported.
 
 ### Alpine runtime and external package caches
 
@@ -138,18 +139,25 @@ The launcher uses image labels `codex.container.distro` and
 `codex.container.base`, plus the image architecture, to choose supported cache
 behavior. Explicit `CONTAINER_IMAGE` overrides work the same way. Unlabelled
 images and unsupported distros retain launch behavior without automatic cache
-mounts. This first adapter is Alpine-only; Fedora runtime DNF cache/config
-integration, including runtime-only `skip_unavailable`, remains deferred.
+mounts. Fedora mounts `$REPO_CACHE/fedora/<tag>/<arch>/dnf` and `libdnf5` at
+`/var/cache/dnf` and `/var/cache/libdnf5`. Fedora runtime images set
+`install_weak_deps=false`, `keepcache=true`, `defaultyes=true`, `assumeyes=true`,
+and `skip_unavailable=true` after all build-time dependency installation. These
+settings remain active with external caching disabled. Build installs stay strict.
 
 ### Environment settings
 
-Use `codex help env` for the complete public configuration reference without
-loading env files or needing Podman. It prints static defaults, not current
-values or credentials. See [the identical reference](docs/environment.md) for
-launcher and firewall/DNS variables, domain categories, cache controls, proxy
-and sidecar inputs, builder settings, runtime-wrapper defaults, and artifact
-controls. `CODEX_ENV_*` targets only the app; firewall settings have their own
-explicit forwarding and direct-script contexts described there.
+Use `codex help env` for [runtime settings](docs/environment-runtime.md), including
+firewall/DNS variables, domain categories, cache controls, sidecars, and app-wrapper
+defaults. Use `./build-images.sh --help-env` for [build settings](docs/environment-build.md).
+Both print defaults without reading launcher env files, checking artifacts, or
+requiring container tools. The [complete reference](docs/environment.md) also
+labels artifact-preparation and direct firewall-script settings separately.
+`CODEX_ENV_*` targets only the app; firewall settings use explicit forwarding.
+
+The wrapper defaults to `--no-alt-screen`, preserving terminal scrollback. Set
+`CODEX_ENV_CODEX_NO_ALT_SCREEN=0` on the host to disable automatic insertion.
+An explicitly supplied native flag is preserved without duplication.
 
 The firewall image resolver is selected before image creation:
 

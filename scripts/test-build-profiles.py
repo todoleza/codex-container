@@ -45,6 +45,34 @@ class ProfilesTest(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertLess(positions[-1], full.index("ansible-galaxy collection install"))
 
+    def test_secrets_and_runtime_dnf_boundaries(self):
+        template = (ROOT/"Dockerfile.in").read_text()
+        for name in m.discover_profiles():
+            profile = m.read_profile(name)
+            text, _ = m.render(profile, template)
+            packages = [pkg for kind in ("apk", "dnf") for source in profile.members[kind] for pkg in m.parse_dnf(source)]
+            self.assertEqual("age" in packages, name in ("infra", "full"), name)
+            self.assertEqual("ARG SOPS_VERSION=latest" in text, name in ("infra", "full"), name)
+            self.assertEqual("sops --version" in text, name in ("infra", "full"), name)
+            self.assertEqual("skip_unavailable=true" in text, profile.distro == "fedora", name)
+            if profile.distro == "fedora":
+                config = text.index("skip_unavailable=true")
+                self.assertGreater(config, text.index("RUN install -d -m 1777"))
+                self.assertLess(config, text.index('USER "${USERNAME}"'))
+
+    def test_short_options_and_build_environment_help(self):
+        import subprocess
+        profiles = m.discover_profiles()
+        for short, long in [(["-p", "infra", "-b"], ["--profile", "infra", "--batch"]),
+                            (["-a", "-x", "full"], ["--all", "--no-profile", "full"])]:
+            self.assertEqual(m.selection(short, profiles), m.selection(long, profiles))
+        result = subprocess.run([str(ROOT/"build-images.sh"), "--help-env"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, (ROOT/"docs/environment-build.md").read_text())
+        self.assertIn("CODEX_FIREWALL_DNS_TOOL", result.stdout)
+        self.assertNotIn("CODEX_ALLOWED_DOMAINS", result.stdout)
+        self.assertNotIn("PROXY_ENABLE", result.stdout)
+
     def test_profile_relationship_validation(self):
         profiles = {name: m.read_profile(name) for name in m.discover_profiles()}
         media_members = dict(profiles["media"].members)
@@ -140,7 +168,7 @@ class ProfilesTest(unittest.TestCase):
         self.assertIn('&& codex --version', text)
         self.assertIsNone(req)
         packages = [pkg for source in profile.members["apk"] for pkg in m.parse_dnf(source)]
-        for package in ("bash", "coreutils", "nodejs", "npm", "github-cli", "git", "py3-pip", "age"):
+        for package in ("bash", "coreutils", "nodejs", "npm", "github-cli", "git", "py3-pip"):
             self.assertIn(package, packages)
         self.assertNotIn("aggregate", packages)  # Explicitly documented parity gap.
         with tempfile.TemporaryDirectory() as directory:

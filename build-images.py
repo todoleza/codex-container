@@ -161,7 +161,7 @@ def dependency_steps(members: dict[str, tuple[Path, ...]], root: Path) -> list[s
     return steps
 
 def render(profile: Profile, template: str, root: Path = ROOT, common: Profile | None = None) -> tuple[str, str | None]:
-    for marker in ("# DISTRO_BASE", "# DISTRO_INITIALIZE", "@CREATE_RUNTIME_USER@", "# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS"):
+    for marker in ("# DISTRO_BASE", "# DISTRO_INITIALIZE", "@CREATE_RUNTIME_USER@", "# COMMON_DEPENDENCY_DROPINS", "# PROFILE_DEPENDENCY_DROPINS", "# ANSIBLE_COLLECTION_DROPINS", "# RUNTIME_PACKAGE_CONFIGURATION"):
         if template.count(marker) != 1: fail(f"Dockerfile.in must contain exactly one {marker} marker")
     common = common or read_profile(profile.base_profile, root)
     if common.name != profile.base_profile or common.distro != profile.distro:
@@ -198,6 +198,10 @@ def render(profile: Profile, template: str, root: Path = ROOT, common: Profile |
     body = template.replace("# COMMON_DEPENDENCY_DROPINS", "\n".join(shared_steps).rstrip())
     body = body.replace("# PROFILE_DEPENDENCY_DROPINS", "\n".join(profile_steps).rstrip())
     body = body.replace("# ANSIBLE_COLLECTION_DROPINS", collection)
+    runtime_config = ""
+    if profile.distro == "fedora":
+        runtime_config = "RUN install -d /etc/dnf/libdnf5.conf.d && printf '%s\\n' '[main]' 'install_weak_deps=false' 'keepcache=true' 'defaultyes=true' 'assumeyes=true' 'skip_unavailable=true' > /etc/dnf/libdnf5.conf.d/99-codex-runtime.conf"
+    body = body.replace("# RUNTIME_PACKAGE_CONFIGURATION", runtime_config)
     return "\n".join(head) + "\n\n" + body, req
 
 def atomic_write(path: Path, content: str):
@@ -216,9 +220,10 @@ def generate(profile: Profile, root: Path = ROOT, common: Profile | None = None)
     atomic_write(out / "Containerfile", containerfile); return out / "Containerfile"
 
 def selection(argv: list[str], profiles: tuple[str, ...]):
-    p = argparse.ArgumentParser(description="Build profile-aware Codex images")
-    p.add_argument("--profile", action="append", default=[], metavar="NAME[,NAME...]"); p.add_argument("--all", "--all-profiles", action="store_true", dest="all_profiles")
-    p.add_argument("--no-profile", action="append", default=[], metavar="NAME[,NAME...]"); p.add_argument("--batch", "--non-interactive", action="store_true", dest="batch")
+    p = argparse.ArgumentParser(description="Build profile-aware Codex images", formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("-p", "--profile", action="append", default=[], metavar="NAME[,NAME...]"); p.add_argument("-a", "--all", "--all-profiles", action="store_true", dest="all_profiles")
+    p.add_argument("-x", "--no-profile", action="append", default=[], metavar="NAME[,NAME...]"); p.add_argument("-b", "--batch", "--non-interactive", action="store_true", dest="batch")
+    p.add_argument("--help-env", help="Show build environment defaults and exit", action="version", version=(ROOT / "docs/environment-build.md").read_text())
     args = p.parse_args(argv); flatten = lambda xs: [x.strip() for item in xs for x in item.split(",") if x.strip()]
     wanted, excluded = flatten(args.profile), flatten(args.no_profile)
     for label, values in (("profile", wanted), ("excluded profile", excluded)):
@@ -310,10 +315,12 @@ def build(argv: list[str]) -> int:
             cache_args = ["--volume", f"{cache}/dnf:/var/cache/dnf:Z,rw", "--volume", f"{cache}/libdnf5:/var/cache/libdnf5:Z,rw"]
             base_arg = f"FEDORA_VERSION={base_version}"
         file = generate(profile, common=profiles[profile.base_profile]); candidate = f"codex:candidate-{name}-{uuid.uuid4().hex[:12]}"
-        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--pull=always", "--build-arg", base_arg, "--build-arg", f"TZ={timezone}", "--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION','latest')}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
+        cmd = base + ["--layers", "--target", "codex-profile", "-t", candidate, "-f", str(file), "--pull=always", "--build-arg", base_arg, "--build-arg", f"TZ={timezone}", "--build-arg", f"CODEX_PACKAGE_VERSION={version}",
           "--label", "org.opencontainers.image.title=codex-container-runtime", "--label", f"codex.cli.version={version}", "--label", f"codex.container.profile={name}", "--label", f"codex.container.distro={profile.distro}", "--label", f"codex.container.base={profile.distro}:{base_version}", "--label", f"org.opencontainers.image.ref.name=codex:{name}",
           "--label", f"org.opencontainers.image.version={version}", "--label", "app.kubernetes.io/name=codex", "--label", "app.kubernetes.io/part-of=codex-container", "--label", "app.kubernetes.io/component=app",
           "--label", f"app.kubernetes.io/version={version}", *cache_args, "--volume", f"{ROOT}/dist/codex.tgz:/tmp/codex.tgz:ro"]
+        if any(source.name == "30-sops.containerfile" for source in profile.members["containerfiles"]):
+            cmd += ["--build-arg", f"SOPS_VERSION={os.environ.get('SOPS_VERSION', 'latest')}"]
         if "ANDROID_ACCEPT_LICENSES" in os.environ:
             cmd += ["--build-arg", f"ANDROID_ACCEPT_LICENSES={os.environ['ANDROID_ACCEPT_LICENSES']}"]
         cmd.append(".")

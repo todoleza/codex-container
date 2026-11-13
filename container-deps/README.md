@@ -30,3 +30,6 @@ children must include its membership and share its distro. DNF/COPR/literal
 Fedora repository components are rejected in Alpine profiles; APK components
 are rejected in Fedora profiles. Common user/runtime/artifact steps are shared
 in Dockerfile.in; only base initialization and account creation differ.
+
+Secrets tooling is optional: only infra/full select `30-secrets.dnf` (age) and
+`30-sops.containerfile` (SOPS). Neither tool is part of a base profile.

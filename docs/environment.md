@@ -1,8 +1,9 @@
 # Environment reference
 
-Run `codex help env` (or `./run-in-container.sh help env`) to print this reference.
-It contains documented defaults, never current values. It works without Podman
-and does not load environment files.
+Runtime-only help: `codex help env` ([reference](environment-runtime.md)).
+Build-only help: `./build-images.sh --help-env` ([reference](environment-build.md)).
+This complete reference additionally covers artifact preparation and direct
+firewall-script invocation. All references show defaults, never current values.
 
 ## Precedence and execution contexts
 
@@ -104,8 +105,9 @@ implicit firewall forwarding prefix.
 | `CODEX_REAL_BIN` | `/usr/local/share/npm-global/bin/codex` | App wrapper: native Codex executable path. |
 | `CODEX_NO_DAEMON` | `1` | App wrapper: 0/1. Set CODEX_ENV_CODEX_NO_DAEMON on the host to forward it. |
 | `CODEX_EXTRA_ADD_DIRS` | `launcher-derived Git metadata paths` | App wrapper: whitespace-separated default --add-dir paths; launcher computes this value. |
+| `CODEX_NO_ALT_SCREEN` | `1` | App wrapper: 0/1. Set CODEX_ENV_CODEX_NO_ALT_SCREEN on the host to forward it; 0 disables automatic --no-alt-screen. |
 
-## Firewall build and direct-script settings
+## Direct firewall scripts and firewall image build (not launcher inputs)
 
 | Variable | Default / derivation | Purpose / context |
 | --- | --- | --- |
@@ -114,7 +116,7 @@ implicit firewall forwarding prefix.
 | `CODEX_FIREWALL_DIG_TIMEOUT` | `0.75 fallback` | Legacy direct-script alias: used only when CODEX_FIREWALL_DNS_TIMEOUT is unset/empty. Launcher always forwards the canonical setting. |
 | `CODEX_FIREWALL_DIG_TRIES` | `5 fallback` | Legacy direct-script alias: used only when CODEX_FIREWALL_DNS_TRIES is unset/empty. Launcher always forwards the canonical setting. |
 
-## Image builder
+## Image builder (not launcher inputs)
 
 | Variable | Default / derivation | Purpose / context |
 | --- | --- | --- |
@@ -123,10 +125,10 @@ implicit firewall forwarding prefix.
 | `DNF_CACHE_DIR` | `${REPO}/.build-cache/dnf-fedora-${FEDORA_VERSION}` | Builder: persistent Fedora build cache, separate from runtime caches. |
 | `ALPINE_VERSION` | `latest` | Builder: Alpine base tag; stable repositories from that image are retained. |
 | `APK_CACHE_DIR` | `${REPO}/.build-cache/apk-alpine-${ALPINE_VERSION}` | Builder: persistent Alpine build cache, separate from runtime caches. |
-| `SOPS_VERSION` | `latest` | Builder: stable SOPS release or an explicit version. |
+| `SOPS_VERSION` | `latest` | Builder/infra/full: stable SOPS release or an explicit version; ignored by other profiles. |
 | `ANDROID_ACCEPT_LICENSES` | `fragment ARG default (currently 1)` | Builder/fdroid: forwarded only when explicitly set; review the Android license first. |
 
-## Artifact preparation and freshness
+## Artifact preparation and freshness (not launcher inputs)
 
 | Variable | Default / derivation | Purpose / context |
 | --- | --- | --- |

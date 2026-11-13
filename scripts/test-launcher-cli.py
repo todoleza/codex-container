@@ -32,7 +32,7 @@ if cmd == 'image':
         elif 'container.distro' in query:
             print(os.environ.get('MOCK_IMAGE_DISTRO', 'alpine' if image == 'codex:alpine' else 'fedora'))
         elif 'container.base' in query:
-            print(os.environ.get('MOCK_IMAGE_BASE', 'alpine:3.24'))
+            print(os.environ.get('MOCK_IMAGE_BASE', 'alpine:3.24' if image == 'codex:alpine' else 'fedora:45'))
         elif 'Architecture' in query:
             print(os.environ.get('MOCK_IMAGE_ARCH', 'amd64'))
         else:
@@ -256,6 +256,24 @@ class LauncherCLI(unittest.TestCase):
         self.run_cli('rm', '-p', 'alpine')
         self.assertTrue((cache / 'saved.apk').exists())
 
+    def test_fedora_cache_and_opt_out(self):
+        self.run_cli('spawn', env={'CODEX_PACKAGE_CACHE_ENABLE':'0'})
+        self.assertFalse((self.base/'package-cache').exists())
+        self.assertFalse(any('/var/cache/' in arg for arg in self.app_runs()[-1]))
+        self.run_cli('replace')
+        cache = self.base / 'package-cache/fedora/45/amd64'
+        self.assertTrue((cache/'dnf').is_dir())
+        self.assertTrue((cache/'libdnf5').is_dir())
+        app = self.app_runs()[-1]
+        self.assertIn(str(cache/'dnf')+':/var/cache/dnf:z', app)
+        self.assertIn(str(cache/'libdnf5')+':/var/cache/libdnf5:z', app)
+        (cache/'libdnf5/saved.rpm').touch()
+        self.run_cli('replace', env={'MOCK_IMAGE_BASE':'fedora:46', 'MOCK_IMAGE_ARCH':'arm64'})
+        self.assertTrue((self.base/'package-cache/fedora/46/arm64/libdnf5').is_dir())
+        self.run_cli('respawn', '--no-package-cache')
+        self.assertFalse(any('/var/cache/' in arg for arg in self.app_runs()[-1]))
+        self.assertTrue((cache/'libdnf5/saved.rpm').exists())
+
     def test_cache_disabled_and_invalid_settings(self):
         self.run_cli('spawn', '-p', 'alpine', env={'CODEX_PACKAGE_CACHE_ENABLE':'0'})
         self.assertFalse(any('/var/cache/apk' in arg for arg in self.app_runs()[-1]))
@@ -300,7 +318,7 @@ class LauncherCLI(unittest.TestCase):
         bad.write_text('invalid env\n')
         output = self.run_cli('help', 'env', env={'CODEX_CONTAINER_ENV_FILES':str(bad),
                                                'OPENAI_API_KEY':'secret-test-value'}).stdout
-        self.assertEqual(output, (REPO/'docs/environment.md').read_text())
+        self.assertEqual(output, (REPO/'docs/environment-runtime.md').read_text())
         self.assertNotIn('secret-test-value', output)
         self.assertEqual(self.calls(), [])
         source = LAUNCHER.read_text()
@@ -310,9 +328,13 @@ class LauncherCLI(unittest.TestCase):
         for name, default in re.findall(r'^\s*: "\$\{([A-Z][A-Z0-9_]*):=(.*)\}"$', source, re.M):
             escaped = (default or '(empty)').replace('|', '\\|')
             self.assertIn('| `'+name+'` | `'+escaped+'` |', output)
+        for name in ('FEDORA_VERSION', 'SOPS_VERSION', 'DNF_CACHE_DIR', 'CODEX_GITHUB_API_URL', 'CODEX_FIREWALL_DNS_TOOL'):
+            self.assertNotIn('`'+name+'`', output)
+        self.assertIn('`CODEX_NO_ALT_SCREEN`', output)
+        full_reference = (REPO/'docs/environment.md').read_text()
         firewall = (REPO/'firewall/firewall-common').read_text()
         for name in set(re.findall(r'\$\{(CODEX_FIREWALL_[A-Z_]+)', firewall)):
-            self.assertIn('`'+name+'`', output)
+            self.assertIn('`'+name+'`', full_reference)
         for internal in ('CODEX_CONTAINER_LAUNCHER_SNAPSHOT', 'CODEX_CONTAINER_BATCH_VERIFY_REMOVAL'):
             self.assertNotIn(internal, output)
 

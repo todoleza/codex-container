@@ -383,9 +383,9 @@ ZSH_COMPLETION
 
 environment_help() {
   cat <<'ENVIRONMENT_REFERENCE'
-# Environment reference
+# Runtime environment reference
 
-Run `codex help env` (or `./run-in-container.sh help env`) to print this reference.
+Run `codex help env` (or `./run-in-container.sh help env`) to print this runtime reference.
 It contains documented defaults, never current values. It works without Podman
 and does not load environment files.
 
@@ -399,8 +399,7 @@ literal NAME=value assignments, without shell evaluation or quote stripping.
 
 `: "${NAME:=default}"` defaults only unset/empty values. An explicit `0` is
 preserved. Where a setting uses `${NAME:-default}`, unset/empty similarly uses
-the fallback without assignment. Python builder settings are read from the
-process environment, not launcher env files. Explicit numeric flags and enum
+the fallback without assignment. Explicit numeric flags and enum
 values are validated by their owning command; values are case-sensitive.
 
 Runtime mount, firewall, proxy, and image settings normally apply when creating
@@ -478,9 +477,9 @@ implicit firewall forwarding prefix.
 | `SIDECAR_<id>_ENV_PREFIX` | `(empty)` | Launcher: prefix of settings exported only to that sidecar, with prefix stripped. |
 | `SIDECAR_<id>_RUN_ARGS` | `(empty)` | Launcher: extra sidecar run arguments; volume sources support documented home/env expansion. |
 | `SIDECAR_<id>_COMMAND` | `(empty)` | Launcher: explicit sidecar command executed with sh -lc. |
-| `HOME` | `host environment` | Launcher/artifact tools: credentials, env-file and home-directory defaults. |
+| `HOME` | `host environment` | Launcher: credentials, env-file and home-directory defaults. |
 | `XDG_RUNTIME_DIR` | `/run/user/UID` | Launcher: workspace registry, policy/proxy state, and snapshots. |
-| `TZ` | `host timezone, then UTC` | Builder/launcher: timezone; explicit TZ wins. |
+| `TZ` | `host timezone, then UTC` | Launcher: timezone; explicit TZ wins. |
 
 ## Runtime wrapper (inside the app container)
 
@@ -489,56 +488,13 @@ implicit firewall forwarding prefix.
 | `CODEX_REAL_BIN` | `/usr/local/share/npm-global/bin/codex` | App wrapper: native Codex executable path. |
 | `CODEX_NO_DAEMON` | `1` | App wrapper: 0/1. Set CODEX_ENV_CODEX_NO_DAEMON on the host to forward it. |
 | `CODEX_EXTRA_ADD_DIRS` | `launcher-derived Git metadata paths` | App wrapper: whitespace-separated default --add-dir paths; launcher computes this value. |
+| `CODEX_NO_ALT_SCREEN` | `1` | App wrapper: 0/1. Set CODEX_ENV_CODEX_NO_ALT_SCREEN on the host to forward it; 0 disables automatic --no-alt-screen. |
 
-## Firewall build and direct-script settings
+External runtime caches support labeled Fedora and Alpine images. Disabling
+external caching does not disable the Fedora image’s runtime DNF defaults.
 
-| Variable | Default / derivation | Purpose / context |
-| --- | --- | --- |
-| `CODEX_FIREWALL_DNS_TOOL` | `dig` | Image build: dig, kdig, or drill; selects the installed resolver. Host changes need an image rebuild. Direct scripts read the image setting. |
-| `CODEX_FIREWALL_STATE_DIR` | `/etc/codex-firewall` | Direct firewall scripts only: writable state path. Launcher mounts policy at the default path; changing it requires matching mount configuration. |
-| `CODEX_FIREWALL_DIG_TIMEOUT` | `0.75 fallback` | Legacy direct-script alias: used only when CODEX_FIREWALL_DNS_TIMEOUT is unset/empty. Launcher always forwards the canonical setting. |
-| `CODEX_FIREWALL_DIG_TRIES` | `5 fallback` | Legacy direct-script alias: used only when CODEX_FIREWALL_DNS_TRIES is unset/empty. Launcher always forwards the canonical setting. |
-
-## Image builder
-
-| Variable | Default / derivation | Purpose / context |
-| --- | --- | --- |
-| `CONTAINER_CLI` | `buildah` | Builder: buildah or podman. |
-| `FEDORA_VERSION` | `latest` | Builder: Fedora base tag; applies only to Fedora profiles. |
-| `DNF_CACHE_DIR` | `${REPO}/.build-cache/dnf-fedora-${FEDORA_VERSION}` | Builder: persistent Fedora build cache, separate from runtime caches. |
-| `ALPINE_VERSION` | `latest` | Builder: Alpine base tag; stable repositories from that image are retained. |
-| `APK_CACHE_DIR` | `${REPO}/.build-cache/apk-alpine-${ALPINE_VERSION}` | Builder: persistent Alpine build cache, separate from runtime caches. |
-| `SOPS_VERSION` | `latest` | Builder: stable SOPS release or an explicit version. |
-| `ANDROID_ACCEPT_LICENSES` | `fragment ARG default (currently 1)` | Builder/fdroid: forwarded only when explicitly set; review the Android license first. |
-
-## Artifact preparation and freshness
-
-| Variable | Default / derivation | Purpose / context |
-| --- | --- | --- |
-| `CODEX_GITHUB_API_URL` | `https://api.github.com/repos/openai/codex` | Artifact tools: upstream release API root. |
-| `CODEX_ARTIFACT_TYPE` | `metadata type, otherwise release` | Artifact tools/builder: release or alpha; artifact CLI selectors override during prepare. |
-| `CODEX_ARTIFACT_STALE_POLICY` | `prompt interactively; fail in batch` | Artifact tools/builder: refresh, continue, fail/abort. |
-| `CODEX_CONTAINER_BATCH` | `0` | Artifact tools/builder: 1 enables batch stale-artifact handling; --batch also supported. |
-| `INTERACTIVE` | `1` | Artifact shell tools: 0 disables prompts; non-TTY stdin also disables prompts. Builder uses --batch/CODEX_CONTAINER_BATCH. |
-| `CODEX_CURL` | `curl` | Artifact tools: curl executable override. |
-| `CODEX_ARTIFACT_RELEASE_PAGE_SIZE` | `10` | Artifact tools: release-list page size. |
-| `CODEX_ARTIFACT_RELEASE_MAX_PAGES` | `10` | Artifact tools: maximum release-list pages. |
-| `CODEX_ARTIFACT_STATUS_TIMEOUT` | `2` | Artifact status: curl timeout, seconds. |
-| `CODEX_ARTIFACT_BUILD_TIMEOUT` | `1` | Builder: freshness-check timeout, seconds. |
-| `CODEX_CURL_MAX_TIME` | `command-specific timeout` | Artifact shell helpers: explicit curl timeout; builder sets it for freshness checks. |
-| `REPO_ROOT` | `artifact script repository` | Artifact shell tools: repository-root override; Python builder always uses its own repository. |
-| `UPSTREAM_CACHE_DIR` | `${REPO_ROOT}/.build-cache/upstream/codex` | Artifact tools: downloaded upstream archive cache. |
-| `DIST_DIR` | `${REPO_ROOT}/dist` | Artifact tools: staged output directory; Python builder still consumes its repository dist/. |
-| `STAGED_ARTIFACT` | `${DIST_DIR}/codex.tgz` | Artifact tools: staged tarball path; Python builder consumes repository dist/codex.tgz. |
-| `ARTIFACT_METADATA` | `${DIST_DIR}/codex-artifact.env` | Artifact tools: metadata path; Python builder consumes repository dist/codex-artifact.env. |
-
-## Internal and derived values
-
-Snapshot markers, batch-dispatch controls, generated resource names, shell
-arrays, and parsed artifact metadata are implementation state, not supported
-configuration inputs. CODEX_FIREWALL_UPDATED_EPOCH is status output, not a
-setting. Standard HOME/TZ/XDG_RUNTIME_DIR values are consumed as noted above;
-this reference does not list every variable consumed by third-party tools.
+Build settings: `./build-images.sh --help-env`. The complete reference, including
+artifact preparation and direct firewall-script settings, is in docs/environment.md.
 ENVIRONMENT_REFERENCE
 }
 
@@ -1390,19 +1346,25 @@ prepare_package_cache() {
   PACKAGE_CACHE_PATH=""
   [[ "$CODEX_PACKAGE_CACHE_ENABLE" = 1 ]] || return 0
   distro="$(inspect_image_label "$CONTAINER_IMAGE" codex.container.distro || true)"
-  # Only Alpine currently has an implemented runtime cache adapter.
-  [[ "$distro" = alpine ]] || return 0
+  [[ "$distro" = alpine || "$distro" = fedora ]] || return 0
   base_image="$(inspect_image_label "$CONTAINER_IMAGE" codex.container.base || true)"
   architecture="$(podman image inspect --format '{{.Architecture}}' "$CONTAINER_IMAGE" 2>/dev/null || true)"
-  [[ "$base_image" = alpine:* ]] || return 0
-  tag="${base_image#alpine:}"
+  [[ "$base_image" = "$distro":* ]] || return 0
+  tag="${base_image#*:}"
   [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ && "$architecture" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || return 0
   cache_root="$(realpath -m "$(expand_home_path "$REPO_CACHE")")"
-  PACKAGE_CACHE_PATH="${cache_root}/alpine/${tag}/${architecture}/apk"
+  PACKAGE_CACHE_PATH="${cache_root}/${distro}/${tag}/${architecture}"
+  [[ "$distro" != alpine ]] || PACKAGE_CACHE_PATH+="/apk"
   # Volume sources cannot contain a colon or newline in Podman's -v syntax.
   [[ "$PACKAGE_CACHE_PATH" != *:* && "$PACKAGE_CACHE_PATH" != *$'\n'* ]] || cli_error 'REPO_CACHE contains an unsupported volume-path character.'
   mkdir -p "$PACKAGE_CACHE_PATH" || return 1
-  PACKAGE_CACHE_VOLUME_ARGS_ARRAY=(-v "${PACKAGE_CACHE_PATH}:/var/cache/apk:z")
+  if [[ "$distro" = alpine ]]; then
+    PACKAGE_CACHE_VOLUME_ARGS_ARRAY=(-v "${PACKAGE_CACHE_PATH}:/var/cache/apk:z")
+  else
+    mkdir -p "${PACKAGE_CACHE_PATH}/dnf" "${PACKAGE_CACHE_PATH}/libdnf5" || return 1
+    PACKAGE_CACHE_VOLUME_ARGS_ARRAY=(-v "${PACKAGE_CACHE_PATH}/dnf:/var/cache/dnf:z"
+      -v "${PACKAGE_CACHE_PATH}/libdnf5:/var/cache/libdnf5:z")
+  fi
 }
 
 report_existing_cache_setting() {
@@ -2198,7 +2160,7 @@ print_startup_summary() {
   echo "runtime image: ${CONTAINER_IMAGE}"
   echo "runtime profile: ${CODEX_CONTAINER_PROFILE}"
   if [[ -n "$PACKAGE_CACHE_PATH" ]]; then
-    echo "external package cache: ${PACKAGE_CACHE_PATH} -> /var/cache/apk"
+    echo "external package cache: ${PACKAGE_CACHE_PATH}"
   else
     echo "external package cache: disabled or unsupported by image metadata"
   fi

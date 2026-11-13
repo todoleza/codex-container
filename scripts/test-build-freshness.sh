@@ -38,7 +38,7 @@ runtime_line="$(grep -n -m1 -- '--target codex-profile' "${BUILDAH_LOG}" | cut -
 test "${firewall_line}" -lt "${runtime_line}"
 grep -Fq '# Profile: default' "${repo_root}/.build-cache/profiles/default/Containerfile"
 : > "${BUILDAH_LOG}"
-(cd "${repo_root}" && FEDORA_VERSION=99 ANDROID_ACCEPT_LICENSES=1 ./build-images.sh --all-profiles --batch)
+(cd "${repo_root}" && FEDORA_VERSION=99 SOPS_VERSION=3.11.0 ANDROID_ACCEPT_LICENSES=1 ./build-images.sh -a -b)
 grep -Fq -- '--build-arg ANDROID_ACCEPT_LICENSES=1' "${BUILDAH_LOG}"
 mapfile -t build_profiles < <(find "${repo_root}/container-profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 test "$(grep -c -- '--target codex-profile' "${BUILDAH_LOG}")" -eq "${#build_profiles[@]}"
@@ -49,6 +49,10 @@ grep -Fq -- '--label codex.container.distro=alpine --label codex.container.base=
 grep -Fq -- "${DNF_CACHE_DIR}/dnf:/var/cache/dnf:Z,rw" "${BUILDAH_LOG}"
 for profile in "${build_profiles[@]}"; do
   grep -Eq "bud --layers --target codex-profile -t codex:candidate-${profile}-" "${BUILDAH_LOG}"
+done
+test "$(grep -c -- '--build-arg SOPS_VERSION=3.11.0' "${BUILDAH_LOG}")" -eq 2
+for profile in infra full; do
+  grep -E "candidate-${profile}-" "${BUILDAH_LOG}" | grep -Fq -- '--build-arg SOPS_VERSION=3.11.0'
 done
 test "$(grep -c 'bud --layers -t codex-firewall' "${BUILDAH_LOG}")" -eq 1
 firewall_line="$(grep -n -m1 'bud --layers -t codex-firewall' "${BUILDAH_LOG}" | cut -d: -f1)"

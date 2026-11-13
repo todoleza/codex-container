@@ -41,19 +41,20 @@ Runtime builds receive the build host's timezone as the `TZ` build argument;
 an explicit host `TZ` wins, followed by `/etc/localtime`, `timedatectl`, and a
 final `UTC` fallback.
 Containerfiles sharing a distro/base profile have an identical internal `codex-common` stage
-containing the default packages, SOPS, runtime files, and user setup. Profile
+containing the default packages, runtime files, and user setup. Profile
 dependencies derive directly from that stage, and the staged Codex artifact is
 installed only in the final `codex-profile` stage. A Codex-only update therefore
 leaves the common and profile dependency layers reusable.
 Selected `container-deps/collections/*.yml` drop-ins are folded into an Ansible
 collection requirements file and installed into the runtime image with
 `ansible-galaxy collection install`.
-The runtime image also installs the latest stable SOPS release binary by
-default; pin it with `SOPS_VERSION=<version> ./build-images.sh`.
+Only `infra` and `full` include age and the latest stable SOPS release binary.
+Pin SOPS with `SOPS_VERSION=<version> ./build-images.sh -p infra`.
 
 With no selector, the builder creates the lean `codex:default` image. Use
-repeated or comma-separated `--profile` values to build exactly those profiles,
-or `--all-profiles` (optionally with `--no-profile`). Available build profiles
+repeated or comma-separated `-p/--profile` values to build exactly those profiles,
+or `-a/--all-profiles` (optionally with `-x/--no-profile`). Use `-b/--batch`
+for batch handling and `--help-env` for build settings. Available build profiles
 are discovered from directories under `container-profiles/`; `default` is the
 required Fedora base. Alpine is a separate base profile; descendants include
 their configured base membership within the same distro. Adding a
@@ -81,7 +82,7 @@ files (`OWNER/PROJECT [CHROOT]`), while `container-deps/repos/` accepts literal
 the firewall allowlist.
 
 DNF component prefixes encode the cache-oriented order: common agent and
-secrets components (`10`-`30`), infrastructure (`40`-`42`), Python (`50`),
+components (`10`-`20`), infra/full secrets (`30`), infrastructure (`40`-`42`), Python (`50`),
 media (`60`), F-Droid (`80`), and disabled components (`90`). This lets `media` reuse the
 Python prefix and `full` reuse the infrastructure prefix without making one
 published profile image inherit another.
@@ -105,9 +106,16 @@ architecture. Existing container mounts require respawn to change.
 The initial Alpine parity gap is `aggregate`; see the
 [Alpine package mapping](container-deps/apk/README.md).
 
-Run `./run-in-container.sh help env` for all public settings and documented
-defaults, including firewall/DNS settings and their forwarding boundaries.
-The same [environment reference](docs/environment.md) is available here.
+Fedora runtime caches mount both `/var/cache/dnf` and `/var/cache/libdnf5` from
+`$REPO_CACHE/fedora/<tag>/<arch>/`. Fedora images disable weak dependencies,
+retain downloads, assume yes, and skip unavailable packages at runtime. These
+DNF defaults apply even with `--no-package-cache`; build installs stay strict.
+The Codex wrapper also defaults to `--no-alt-screen`; set
+`CODEX_ENV_CODEX_NO_ALT_SCREEN=0` to disable automatic insertion.
+
+Runtime help (`codex help env`) and build help (`./build-images.sh --help-env`)
+show only their applicable settings. See [runtime](docs/environment-runtime.md),
+[build](docs/environment-build.md), and [complete](docs/environment.md) references.
 
 The optional `fdroid` profile supplies the toolchain described in
 `fdroid-repo.md`: Java 25, Android CLI tools, Build Tools 36.0.0 (`apksigner`,

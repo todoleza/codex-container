@@ -1,5 +1,48 @@
 # Project History
 
+## 2026-11-11 - Finish runtime cache controls and separate profile tooling/help
+
+### Changed and decisions
+- Added default --no-alt-screen insertion to the app wrapper with
+  CODEX_NO_ALT_SCREEN=0 opt-out; host forwarding uses CODEX_ENV_CODEX_NO_ALT_SCREEN.
+- Extended metadata-based runtime caches to Fedora, partitioning DNF/libdnf5
+  storage by distro, tag, and architecture under REPO_CACHE. Existing cache
+  defaults, opt-out precedence, batch propagation, and retained host data apply.
+- Fedora images now install runtime DNF configuration after all dependency
+  installers: weak dependencies off, keepcache, defaultyes/assumeyes, and
+  skip_unavailable. Disabling external storage leaves these defaults active;
+  build dependency transactions retain strict failure behavior.
+- Moved SOPS from the common template to a selected fragment and removed age
+  from base/other profiles. Only infra/full select both; full remains an infra
+  superset. SOPS_VERSION is declared/forwarded only for selecting profiles.
+- Split runtime help (`codex help env`) and build help (`build-images.sh
+  --help-env`); keep complete documentation with separately labeled artifact
+  preparation and direct firewall-script settings. Help shows defaults without
+  reading env files, checking artifacts, or invoking container tools.
+- Added builder aliases -p/--profile, -a/--all, -x/--no-profile, -b/--batch.
+  Updated usage, profile/cache decisions, environment references, and todo.txt.
+
+### Evidence and validation
+- Inspected the helper's cache/DNF settings and existing profile/cache/help
+  contracts. The [DNF5 configuration reference](https://dnf5.readthedocs.io/en/latest/dnf5.conf.5.html)
+  distinguishes package-level skip_unavailable from repository availability;
+  used the requested former.
+- Profile/generation tests: 17 passed. Launcher CLI tests: 21 passed.
+  Mocked builds verify SOPS arguments only on infra/full, alongside existing
+  artifact, Fedora/Alpine, promotion, and failure coverage.
+- Wrapper tests cover terminal default/opt-out, explicit flag deduplication,
+  exact payload boundaries, and existing daemon/sandbox/add-dir behavior.
+  All five launcher shell regressions passed. Bash/Zsh completion syntax,
+  generated Bash completion ShellCheck, and git diff --check passed.
+  Launcher ShellCheck retains its seven prior findings; wrapper has none.
+
+### Follow-up
+- Podman/Buildah remain unavailable: real Fedora/Alpine builds, runtime DNF,
+  root package installation, non-root checks, and cache ownership/reuse/opt-out
+  require host validation. Arch/Debian and Alpine aggregate parity remain open.
+- Preserved the newly added todo about refusing multiple matching containers;
+  that behavior is outside this approved implementation batch.
+
 ## 2026-11-11 - Add an Alpine runtime profile and discoverable cache/config controls
 
 ### Changed and decisions

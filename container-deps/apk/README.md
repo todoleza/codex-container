@@ -21,7 +21,8 @@ errors fail the build; no skip-unavailable option is enabled.
 
 Other default tools retain their package names. Bash, coreutils, findutils,
 and tzdata explicitly support the shared runtime scripts and timezone behavior.
-SOPS and Codex use the common installation path. Alpine uses the selected base
+Codex uses the common installation path. SOPS and age are omitted from Alpine;
+they are selected only by the Fedora infra/full profiles. Alpine uses the selected base
 image's stable main/community repositories; do not add edge to fill gaps.
 Package sources were inspected for Alpine 3.24, including
 [ExifTool](https://github.com/alpinelinux/aports/blob/3.24-stable/community/perl-image-exiftool/APKBUILD).

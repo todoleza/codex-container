@@ -38,7 +38,7 @@ The build driver derives `TZ` from the build host and passes it explicitly to
 every runtime profile build, falling back to `UTC` when host detection fails.
 
 Each generated Containerfile builds an internal `codex-common` stage from its
-base profile plus SOPS, runtime files, and user setup. Common stages are
+base profile plus runtime files and user setup. Common stages are
 identical within a distro/base family. Every published profile adds
 only its dependency delta, installs its selected collections, and installs the
 frequently changing Codex artifact last. The internal stage is not published
@@ -62,7 +62,7 @@ any selected runtime profile. Enforced startup treats the firewall sidecar as a
 hard runtime dependency; explicitly lifted startup treats it as best-effort. A
 firewall image build failure still prevents runtime image builds.
 
-DNF components use a canonical cache order: common (`10`-`30`), infrastructure
+DNF components use a canonical cache order: common (`10`-`20`), infra/full secrets (`30`), infrastructure
 (`40`-`42`), Python (`50`), media (`60`), and disabled (`90`). `media` therefore
 shares Python's dependency prefix, while `full` shares infrastructure's DNF
 prefix before adding Python and media dependencies. These are cache prefixes,
@@ -99,7 +99,7 @@ The optional `alpine` profile defaults to `alpine:latest`, configurable through
 the per-Alpine-tag build cache. Fedora profiles, shared artifact handling,
 promotion/rollback, runtime scripts, and firewall boundaries are preserved.
 
-Runtime APK caches default through `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`;
+Runtime Fedora and APK caches default through `: "${CODEX_PACKAGE_CACHE_ENABLE:=1}"`;
 explicit `0` disables them. `--no-package-cache` overrides environment settings
 for launches/spawn/replace/respawn, including batch respawn. Cache support uses
 image distro/base labels and architecture; unsupported/unlabelled images have
@@ -107,15 +107,24 @@ no automatic cache mount. `REPO_CACHE` defaults to
 `/var/tmp/container_repo_cache`, segregated by distro/tag/architecture.
 Caches survive instance cleanup; existing mounts require respawn to change.
 
-`help env` prints the static public environment reference before env loading
-or Podman checks. It includes firewall/DNS/domain controls, forwarding contexts,
-cache settings, and builder/artifact settings; docs/environment.md matches that
-output. Values and credentials are never displayed by this command.
+`help env` prints runtime-only defaults before env loading or Podman checks;
+docs/environment-runtime.md matches that output. `build-images.sh --help-env`
+prints build-only settings from docs/environment-build.md. The complete reference
+keeps artifact preparation and direct firewall-script settings separately labeled.
+Values and credentials are never displayed by these commands.
 
-Remaining gates: real Alpine build, non-root/runtime checks, root APK installs,
-and cache reuse on a capable Podman/Buildah host. Fedora runtime DNF settings
-(including runtime-only skip_unavailable), Arch/Debian, additional Alpine
-variants, and --no-alt-screen remain follow-up work.
+Fedora cache mounts use `REPO_CACHE/fedora/<tag>/<arch>/{dnf,libdnf5}`. Runtime-only
+DNF defaults disable weak dependencies, retain downloads, assume yes, and enable
+skip_unavailable. Install this configuration after every build dependency installer
+so builds remain strict; disabling external caches leaves the runtime defaults active.
+SOPS is a selected fragment and age a selected package only in infra/full, preserving
+full as an infra superset and keeping the common stage identical across Fedora profiles.
+The app wrapper defaults to --no-alt-screen; CODEX_NO_ALT_SCREEN=0 disables insertion.
+Builder short aliases are -p, -a, -x, and -b for profile, all, exclusions, and batch.
+
+Remaining gates: real Fedora/Alpine builds, non-root/runtime checks, root package
+installs, runtime DNF settings, and cache ownership/reuse/opt-out on a capable host.
+Arch/Debian and additional Alpine variants remain follow-up work.
 
 ### Pod layout
 
